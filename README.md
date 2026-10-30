@@ -1,29 +1,36 @@
-# codediff.nvim
+# CodeDiff Plus
 
-**Keep the agent running. Review changes as they land.**
+**Code diffs and AI-guided review for Neovim.**
 
-CodeDiff is a live code review workspace for Neovim with VSCode style diffs, built for human-in-the-loop AI development. Run any coding agent in the background while you inspect and navigate changes as they land.
-
-CodeDiff stays synchronized with a changing repository, so review can continue as the code evolves. From the same workspace, you can stage or discard changes, review branches and pull requests, browse history, and resolve merge conflicts.
+CodeDiff Plus brings VSCode style diffs to Neovim. Compare files, review repository changes, browse history, and resolve merge conflicts from one workspace.
 
 > [!NOTE]
 > This project began as a fork of [esmuellert/codediff.nvim](https://github.com/esmuellert/codediff.nvim) and is now developed independently. Thanks to esmuellert and the original contributors for their work.
 
 <div align="center">
 
-https://github.com/user-attachments/assets/3c66a26d-5ff9-4dac-8035-a2f2b7bd2308
+[![AI-guided review demo](docs/media/codediff-plus-ai-demo.gif)](docs/media/codediff-plus-ai-demo.mp4)
+
+Watch the AI-guided review demo
 
 </div>
 
-## Features
+## Code diff features
 
-- **Live review:** Changes appear as they land while any coding agent works in the background.
 - **VSCode style diffs:** Review side-by-side or inline changes with line- and character-level highlighting.
-- **Human control:** Inspect, stage, unstage, or discard files and hunks from one review workspace.
-- **Complete workflows:** Review local changes, staged changes, revisions, pull requests, and history.
-- **Focused navigation:** Move between files and hunks, fold unchanged code, and track moved blocks.
-- **Conflict resolution:** Resolve merge conflicts per block or across the whole file.
-- **Editor-native context:** Keep Tree-sitter syntax highlighting in revision buffers.
+- **Git workflows:** Stage, unstage, or discard files and hunks. Review branches, pull requests, and history.
+- **Navigation and context:** Jump between files and hunks, fold unchanged code, and track moved blocks with Tree-sitter highlighting.
+- **Merge conflicts:** Resolve individual blocks or the whole file.
+
+## AI review features
+
+**Keep your coding agent running. Review changes as they land.** The diff view updates as files change, so you can review work from any agent.
+
+- **Guided review:** Use Codex to group related changes into review steps with explanations and code excerpts.
+- **Ask questions:** Ask about the current step without leaving Neovim.
+- **Track progress:** Mark steps as reviewed and return to saved guides. Refresh a guide when its source changes.
+
+AI review is optional and uses your Codex ChatGPT login. [Set up AI review](#ai-setup) to get started.
 
 ## Installation
 
@@ -41,7 +48,8 @@ https://github.com/user-attachments/assets/3c66a26d-5ff9-4dac-8035-a2f2b7bd2308
 **Minimal installation:**
 ```lua
 {
-  "esmuellert/codediff.nvim",
+  "TroyOwens0493/codediff-plus.nvim",
+  main = "codediff",
   cmd = "CodeDiff",
 }
 ```
@@ -66,12 +74,12 @@ To install without a plugin manager, follow these steps. The example uses a Unix
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/esmuellert/codediff.nvim ~/.local/share/nvim/codediff.nvim
+git clone https://github.com/TroyOwens0493/codediff-plus.nvim ~/.local/share/nvim/codediff-plus.nvim
 ```
 
 2. **Add to your Neovim runtime path in `init.lua`:**
 ```lua
-vim.opt.rtp:append("~/.local/share/nvim/codediff.nvim")
+vim.opt.rtp:append("~/.local/share/nvim/codediff-plus.nvim")
 ```
 
 3. **Restart Neovim and use `:CodeDiff`.**
@@ -101,7 +109,7 @@ If no pre-built binary is available for your platform, use Option B.
 
 Build requirements: a C11 compiler. CMake 3.15 or newer is optional for the developer build.
 
-Run the following commands from the plugin root directory. For the Unix example above, first run `cd ~/.local/share/nvim/codediff.nvim`.
+Run the following commands from the plugin root directory. For the Unix example above, first run `cd ~/.local/share/nvim/codediff-plus.nvim`.
 
 Using build scripts (no CMake required):
 ```bash
@@ -129,7 +137,8 @@ Both methods automatically place the library in the plugin root directory.
 
 ```lua
 {
-  "esmuellert/codediff.nvim",
+  "TroyOwens0493/codediff-plus.nvim",
+  main = "codediff",
   cmd = "CodeDiff",
   opts = {
     -- Highlight configuration
@@ -632,7 +641,7 @@ git difftool main feature-branch
 
 ### Extend CodeDiff
 
-#### AI setup (this fork)
+#### AI setup
 
 Install the [Codex CLI](https://learn.chatgpt.com/docs/cli) and enable guided review:
 
@@ -661,7 +670,7 @@ restarts this timer. There is no total duration limit while events arrive.
 `ai.request_timeout_ms` separately limits each setup or control request to
 30000 ms by default.
 
-#### Guided review (this fork)
+#### Guided review
 
 Open a CodeDiff comparison, enable `ai.enabled`, and run `:CodeDiffReview start`.
 The guide uses the configured Codex connection. It reads the complete
