@@ -3,24 +3,11 @@ local M = {}
 
 local run_git_async = require("codediff.core.git.runner").run_async
 
--- Apply a unified diff patch to the git index (async)
--- Used for hunk-level staging: generates a patch for a single hunk and applies it
--- to the index without touching the working tree.
---
--- git_root: absolute path to git repository root
--- patch: string containing a valid unified diff patch
--- reverse: if true, reverse-apply the patch (used for unstaging)
--- callback: function(err) - nil err on success
--- Apply a unified diff patch via git apply (async)
--- Supports staging hunks (--cached), unstaging (--cached --reverse),
--- and discarding from working tree (--reverse, no --cached).
---
--- git_root: absolute path to git repository root
--- patch: string containing a valid unified diff patch
--- opts: table with optional flags:
---   cached: boolean - apply to index (default: true)
---   reverse: boolean - reverse-apply the patch (default: false)
--- callback: function(err) - nil err on success
+--- Apply a hunk patch to the index or working tree.
+---@param git_root string
+---@param patch string Unified diff, ending with a newline
+---@param opts boolean|table? Legacy reverse flag, or { cached?: boolean, reverse?: boolean }; cached defaults to true
+---@param callback fun(err: string?)
 function M.apply_patch(git_root, patch, opts, callback)
   -- Support old signature: apply_patch(git_root, patch, reverse, callback)
   if type(opts) == "boolean" then
@@ -109,58 +96,27 @@ function M.apply_patch(git_root, patch, opts, callback)
   end
 end
 
--- Stage a file (git add)
--- git_root: absolute path to git repository root
--- rel_path: relative path from git root
--- callback: function(err)
+-- Share transport and error formatting; each operation keeps its Git arguments.
+local function run_write(git_root, args, failure, callback)
+  run_git_async(args, { cwd = git_root }, function(err)
+    callback(err and (failure .. err) or nil)
+  end)
+end
+
 function M.stage_file(git_root, rel_path, callback)
-  run_git_async({ "add", "--", rel_path }, { cwd = git_root }, function(err, _)
-    if err then
-      callback("Failed to stage file: " .. err)
-    else
-      callback(nil)
-    end
-  end)
+  run_write(git_root, { "add", "--", rel_path }, "Failed to stage file: ", callback)
 end
 
--- Unstage a file (git reset HEAD)
--- git_root: absolute path to git repository root
--- rel_path: relative path from git root
--- callback: function(err)
 function M.unstage_file(git_root, rel_path, callback)
-  run_git_async({ "reset", "HEAD", "--", rel_path }, { cwd = git_root }, function(err, _)
-    if err then
-      callback("Failed to unstage file: " .. err)
-    else
-      callback(nil)
-    end
-  end)
+  run_write(git_root, { "reset", "HEAD", "--", rel_path }, "Failed to unstage file: ", callback)
 end
 
--- Stage all files (git add -A)
--- git_root: absolute path to git repository root
--- callback: function(err)
 function M.stage_all(git_root, callback)
-  run_git_async({ "add", "-A" }, { cwd = git_root }, function(err, _)
-    if err then
-      callback("Failed to stage all files: " .. err)
-    else
-      callback(nil)
-    end
-  end)
+  run_write(git_root, { "add", "-A" }, "Failed to stage all files: ", callback)
 end
 
--- Unstage all files (git reset HEAD)
--- git_root: absolute path to git repository root
--- callback: function(err)
 function M.unstage_all(git_root, callback)
-  run_git_async({ "reset", "HEAD" }, { cwd = git_root }, function(err, _)
-    if err then
-      callback("Failed to unstage all files: " .. err)
-    else
-      callback(nil)
-    end
-  end)
+  run_write(git_root, { "reset", "HEAD" }, "Failed to unstage all files: ", callback)
 end
 
 -- Restore/discard changes to a file (git checkout -- or git restore)
@@ -211,13 +167,7 @@ end
 -- rel_path: relative path from git root
 -- callback: function(err)
 function M.delete_untracked(git_root, rel_path, callback)
-  run_git_async({ "clean", "-fd", "--", rel_path }, { cwd = git_root }, function(err, _)
-    if err then
-      callback("Failed to delete untracked file: " .. err)
-    else
-      callback(nil)
-    end
-  end)
+  run_write(git_root, { "clean", "-fd", "--", rel_path }, "Failed to delete untracked file: ", callback)
 end
 
 return M

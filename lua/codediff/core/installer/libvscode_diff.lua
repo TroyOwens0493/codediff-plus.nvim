@@ -5,6 +5,21 @@ local M = {}
 
 local common = require("codediff.core.installer.common")
 
+-- Status messages respect silent mode; failures still report their cause.
+local function notify(opts, message, level)
+  if not opts.silent then
+    vim.notify(message, level)
+  end
+end
+
+local function fail(message, temp_path)
+  vim.notify(message, vim.log.levels.ERROR)
+  if temp_path then
+    os.remove(temp_path)
+  end
+  return false, message
+end
+
 -- Get the plugin root directory using shared path utility
 local path_util = require("codediff.core.path")
 local function get_plugin_root()
@@ -69,7 +84,6 @@ local function get_installed_version()
     end
   end
 
-  -- Return the latest version if any found
   if #versions > 0 then
     table.sort(versions, function(a, b)
       -- Parse semantic versions (e.g., "0.11.1")
@@ -108,21 +122,13 @@ local function build_download_url(os, arch, version)
   return url, local_filename, nil
 end
 
--- Check if Neovim is running from Nix store
--- When nvim is from Nix, it uses Nix's own ld-linux which does NOT search
--- system library paths (/usr/lib, ldconfig cache). Libraries must be either:
--- 1. In RPATH/RUNPATH of the binary
--- 2. In Nix store paths configured in Nix's ld.so.cache
--- 3. Bundled alongside the .so (via $ORIGIN RPATH)
+-- Nix's linker does not use the system ldconfig cache; bundle libgomp beside the .so.
 local function is_nvim_from_nix()
   local resolved = vim.fn.resolve(vim.v.progpath)
   return resolved:find("^/nix/store") ~= nil
 end
 
--- Check if libgomp is available on the system
--- Uses ldconfig cache which matches what the native linker actually searches.
--- This is more reliable than ffi.load() which may find libraries via LD_LIBRARY_PATH
--- that aren't available when our binary loads (e.g., NixOS intermittent failures).
+-- Use ldconfig rather than ffi.load: LD_LIBRARY_PATH can hide a missing dependency.
 local function check_system_libgomp()
   local os_name = common.detect_os()
 
@@ -137,9 +143,6 @@ local function check_system_libgomp()
     return true
   end
 
-  -- If nvim is from Nix store, system ldconfig is NOT used by Nix's ld-linux.
-  -- We must bundle libgomp since Nix's linker won't find /usr/lib libraries.
-  -- This handles both NixOS and non-NixOS systems using Nix Home Manager for nvim.
   if is_nvim_from_nix() then
     return false
   end
@@ -171,50 +174,33 @@ local function install_libgomp_if_needed(opts)
   local plugin_root = get_plugin_root()
   local libgomp_path = plugin_root .. "/libgomp.so.1"
 
-  -- Check if already bundled
   if vim.fn.filereadable(libgomp_path) == 1 then
-    if not opts.silent then
-      vim.notify("libgomp.so.1 already bundled", vim.log.levels.DEBUG)
-    end
+    notify(opts, "libgomp.so.1 already bundled", vim.log.levels.DEBUG)
     return true
   end
 
-  -- Check if system has libgomp
   if check_system_libgomp() then
-    if not opts.silent then
-      vim.notify("System libgomp.so.1 found, no need to bundle", vim.log.levels.DEBUG)
-    end
+    notify(opts, "System libgomp.so.1 found, no need to bundle", vim.log.levels.DEBUG)
     return true
   end
 
-  -- Need to download libgomp
-  if not opts.silent then
-    vim.notify("System libgomp.so.1 not found, downloading...", vim.log.levels.INFO)
-  end
+  notify(opts, "System libgomp.so.1 not found, downloading...", vim.log.levels.INFO)
 
   local arch, arch_err = common.detect_arch()
   if not arch then
-    local msg = "Failed to detect architecture: " .. (arch_err or "unknown error")
-    vim.notify(msg, vim.log.levels.ERROR)
-    return false, msg
+    return fail("Failed to detect architecture: " .. (arch_err or "unknown error"))
   end
 
   local current_version = get_current_version()
   if not current_version then
-    local msg = "Failed to read VERSION"
-    vim.notify(msg, vim.log.levels.ERROR)
-    return false, msg
+    return fail("Failed to read VERSION")
   end
 
-  -- Build libgomp download URL
   local libgomp_filename = string.format("libgomp_linux_%s_%s.so.1", arch, current_version)
   local url = string.format("https://github.com/esmuellert/codediff.nvim/releases/download/v%s/%s", current_version, libgomp_filename)
 
-  if not opts.silent then
-    vim.notify("Downloading libgomp from: " .. url, vim.log.levels.INFO)
-  end
+  notify(opts, "Downloading libgomp from: " .. url, vim.log.levels.INFO)
 
-  -- Download to temporary location
   local temp_path = plugin_root .. "/libgomp.so.1.tmp"
   local success, err = common.download_file(url, temp_path)
 
@@ -227,7 +213,6 @@ local function install_libgomp_if_needed(opts)
     return true
   end
 
-  -- Move to final location
   if vim.fn.filereadable(libgomp_path) == 1 then
     os.remove(libgomp_path)
   end
@@ -240,9 +225,7 @@ local function install_libgomp_if_needed(opts)
     return true -- Don't fail installation
   end
 
-  if not opts.silent then
-    vim.notify("Successfully downloaded libgomp.so.1", vim.log.levels.INFO)
-  end
+  notify(opts, "Successfully downloaded libgomp.so.1", vim.log.levels.INFO)
 
   return true
 end
@@ -256,9 +239,7 @@ function M.install(opts)
   local current_version = get_current_version()
 
   if not current_version then
-    local msg = "Failed to read VERSION"
-    vim.notify(msg, vim.log.levels.ERROR)
-    return false, msg
+    return fail("Failed to read VERSION")
   end
 
   local lib_filename = get_lib_filename(current_version)
@@ -270,9 +251,7 @@ function M.install(opts)
     local unversioned_lib = get_unversioned_lib_filename()
     local unversioned_path = plugin_root .. "/" .. unversioned_lib
     if vim.fn.filereadable(unversioned_path) == 1 then
-      if not opts.silent then
-        vim.notify("libvscode-diff (manual build) found at: " .. unversioned_path, vim.log.levels.INFO)
-      end
+      notify(opts, "libvscode-diff (manual build) found at: " .. unversioned_path, vim.log.levels.INFO)
       -- Still check and install libgomp if needed (e.g., Nix environment)
       install_libgomp_if_needed(opts)
       return true
@@ -282,9 +261,7 @@ function M.install(opts)
 
     if installed_version and installed_version == current_version then
       if vim.fn.filereadable(lib_path) == 1 then
-        if not opts.silent then
-          vim.notify("libvscode-diff already installed at: " .. lib_path, vim.log.levels.INFO)
-        end
+        notify(opts, "libvscode-diff already installed at: " .. lib_path, vim.log.levels.INFO)
         -- Still check and install libgomp if needed (e.g., Nix environment)
         install_libgomp_if_needed(opts)
         return true
@@ -301,26 +278,19 @@ function M.install(opts)
     end
   end
 
-  -- Detect platform
   local os_name = common.detect_os()
   local arch, arch_err = common.detect_arch()
 
   if not arch then
-    local msg = "Failed to detect architecture: " .. (arch_err or "unknown error")
-    vim.notify(msg, vim.log.levels.ERROR)
-    return false, msg
+    return fail("Failed to detect architecture: " .. (arch_err or "unknown error"))
   end
 
-  -- Build download URL
   local url, local_filename, url_err = build_download_url(os_name, arch, current_version)
 
   if not url then
-    local msg = "Failed to build download URL: " .. (url_err or "unknown error")
-    vim.notify(msg, vim.log.levels.ERROR)
-    return false, msg
+    return fail("Failed to build download URL: " .. (url_err or "unknown error"))
   end
 
-  -- Download to temporary location first
   local temp_path = plugin_root .. "/" .. local_filename .. ".tmp"
   local success, err = common.download({
     name = "libvscode-diff",
@@ -333,14 +303,9 @@ function M.install(opts)
   })
 
   if not success then
-    local msg = "Failed to download library: " .. (err or "unknown error")
-    vim.notify(msg, vim.log.levels.ERROR)
-    -- Clean up temp file if it exists
-    os.remove(temp_path)
-    return false, msg
+    return fail("Failed to download library: " .. (err or "unknown error"), temp_path)
   end
 
-  -- Move to final location
   -- On Windows, os.rename fails if destination exists, so remove it first
   if vim.fn.filereadable(lib_path) == 1 then
     os.remove(lib_path)
@@ -348,10 +313,7 @@ function M.install(opts)
 
   local ok = os.rename(temp_path, lib_path)
   if not ok then
-    local msg = "Failed to move library to final location: " .. lib_path
-    vim.notify(msg, vim.log.levels.ERROR)
-    os.remove(temp_path)
-    return false, msg
+    return fail("Failed to move library to final location: " .. lib_path, temp_path)
   end
 
   common.notify_success("libvscode-diff", opts.silent)
@@ -362,23 +324,9 @@ function M.install(opts)
   return true
 end
 
--- Check if library is installed
 function M.is_installed()
-  local plugin_root = get_plugin_root()
-
-  -- Check unversioned first (manual build)
-  local unversioned_lib = get_unversioned_lib_filename()
-  if vim.fn.filereadable(plugin_root .. "/" .. unversioned_lib) == 1 then
-    return true
-  end
-
-  local current_version = get_current_version()
-  if not current_version then
-    return false
-  end
-
-  local lib_path = plugin_root .. "/" .. get_lib_filename(current_version)
-  return vim.fn.filereadable(lib_path) == 1
+  local lib_path = M.get_lib_path()
+  return lib_path ~= nil and vim.fn.filereadable(lib_path) == 1
 end
 
 -- Get library path

@@ -81,94 +81,62 @@ local function line_stats_options()
   return (config.options.explorer or {}).line_stats or {}
 end
 
-function M.get_status_with_line_stats(git_root, callback, pathspec)
+-- Wrap discovery once. Requests describe which numstat result belongs to each group.
+local function with_stats(git_root, callback, pathspec, discover, requests, count_untracked)
   local options = line_stats_options()
   if not options.enabled then
-    changes.get_status(git_root, callback, pathspec)
+    discover(callback)
     return
   end
-
-  changes.get_status(git_root, function(err, result)
+  discover(function(err, result)
     if err then
       callback(err, nil)
       return
     end
-    collect_line_stats(git_root, {
-      {
-        args = vim.list_extend({ "diff", "--numstat", "-z", "-M", "--" }, pathspec or {}),
-        entries = { result.unstaged, result.conflicts },
-      },
-      {
-        args = vim.list_extend({ "diff", "--cached", "--numstat", "-z", "-M", "--" }, pathspec or {}),
-        entries = { result.staged },
-      },
-    }, function(stats_err)
+    local queries = {}
+    for _, request in ipairs(requests) do
+      local entries = {}
+      for _, group in ipairs(request.groups) do
+        entries[#entries + 1] = result[group]
+      end
+      queries[#queries + 1] = { args = vim.list_extend(request.args, pathspec or {}), entries = entries }
+    end
+    collect_line_stats(git_root, queries, function(stats_err)
       if stats_err then
         callback(stats_err, nil)
         return
       end
-      if options.count_untracked then
+      if count_untracked and options.count_untracked then
         attach_untracked_line_stats(result.unstaged, git_root, options.max_untracked_bytes or 1024 * 1024)
       end
       callback(nil, result)
     end)
-  end, pathspec)
+  end)
+end
+
+function M.get_status_with_line_stats(git_root, callback, pathspec)
+  with_stats(git_root, callback, pathspec, function(done)
+    changes.get_status(git_root, done, pathspec)
+  end, {
+    { args = { "diff", "--numstat", "-z", "-M", "--" }, groups = { "unstaged", "conflicts" } },
+    { args = { "diff", "--cached", "--numstat", "-z", "-M", "--" }, groups = { "staged" } },
+  }, true)
 end
 
 function M.get_diff_revision_with_line_stats(revision, git_root, callback, pathspec)
-  local options = line_stats_options()
-  if not options.enabled then
-    changes.get_diff_revision(revision, git_root, callback, pathspec)
-    return
-  end
-
-  changes.get_diff_revision(revision, git_root, function(err, result)
-    if err then
-      callback(err, nil)
-      return
-    end
-    collect_line_stats(git_root, {
-      {
-        args = vim.list_extend({ "diff", "--numstat", "-z", "-M", revision, "--" }, pathspec or {}),
-        entries = { result.unstaged },
-      },
-    }, function(stats_err)
-      if stats_err then
-        callback(stats_err, nil)
-        return
-      end
-      if options.count_untracked then
-        attach_untracked_line_stats(result.unstaged, git_root, options.max_untracked_bytes or 1024 * 1024)
-      end
-      callback(nil, result)
-    end)
-  end, pathspec)
+  with_stats(git_root, callback, pathspec, function(done)
+    changes.get_diff_revision(revision, git_root, done, pathspec)
+  end, {
+    { args = { "diff", "--numstat", "-z", "-M", revision, "--" }, groups = { "unstaged" } },
+  }, true)
 end
 
 function M.get_diff_revisions_with_line_stats(rev1, rev2, git_root, callback, pathspec)
-  if not line_stats_options().enabled then
-    changes.get_diff_revisions(rev1, rev2, git_root, callback, pathspec)
-    return
-  end
-
-  changes.get_diff_revisions(rev1, rev2, git_root, function(err, result)
-    if err then
-      callback(err, nil)
-      return
-    end
-    collect_line_stats(git_root, {
-      {
-        args = vim.list_extend({ "diff", "--numstat", "-z", "-M", rev1, rev2, "--" }, pathspec or {}),
-        entries = { result.unstaged },
-      },
-    }, function(stats_err)
-      if stats_err then
-        callback(stats_err, nil)
-        return
-      end
-      callback(nil, result)
-    end)
-  end, pathspec)
+  with_stats(git_root, callback, pathspec, function(done)
+    changes.get_diff_revisions(rev1, rev2, git_root, done, pathspec)
+  end, {
+    { args = { "diff", "--numstat", "-z", "-M", rev1, rev2, "--" }, groups = { "unstaged" } },
+  }, false)
 end
 
 return M

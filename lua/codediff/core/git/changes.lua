@@ -17,6 +17,24 @@ local function unquote_path(path)
   return path
 end
 
+-- All name-status queries use the same quoting and rename rules.
+local function parse_name_status(output, pattern)
+  local files = {}
+  for line in output:gmatch(pattern or "[^\r\n]+") do
+    local parts = vim.split(line, "\t")
+    if #parts >= 2 then
+      local status = parts[1]:sub(1, 1)
+      local renamed = status == "R" and #parts >= 3
+      files[#files + 1] = {
+        path = unquote_path(parts[renamed and 3 or 2]),
+        status = status,
+        old_path = renamed and unquote_path(parts[2]) or nil,
+      }
+    end
+  end
+  return files
+end
+
 -- Read `explorer.untracked` from config, validated. Owned by the domain
 -- functions that need it (get_status, get_diff_revision) — see #389 for the
 -- semantics of each mode; run_git_async stays a dumb transport.
@@ -26,27 +44,9 @@ local function untracked_mode()
   return UNTRACKED_MODES[mode] and mode or "all"
 end
 
--- Check if a git status code indicates a merge conflict
--- Git uses these status codes for conflicts:
--- U = unmerged (both modified, added by us/them, deleted by us/them)
--- A on both sides = both added
--- D on both sides = both deleted
-local function is_conflict_status(index_status, worktree_status)
-  -- UU = both modified (most common)
-  -- AA = both added
-  -- DD = both deleted
-  -- AU/UA = added by us/them
-  -- DU/UD = deleted by us/them
-  if index_status == "U" or worktree_status == "U" then
-    return true
-  end
-  if index_status == "A" and worktree_status == "A" then
-    return true
-  end
-  if index_status == "D" and worktree_status == "D" then
-    return true
-  end
-  return false
+-- U in either column, AA, and DD are merge conflicts.
+local function is_conflict_status(index, worktree)
+  return index == "U" or worktree == "U" or index == "A" and worktree == "A" or index == "D" and worktree == "D"
 end
 
 -- Get git status for current repository (async)
@@ -144,28 +144,7 @@ function M.get_diff_revision(revision, git_root, callback, pathspec)
       staged = {},
     }
 
-    for line in output:gmatch("[^\r\n]+") do
-      if #line > 0 then
-        local parts = vim.split(line, "\t")
-        if #parts >= 2 then
-          local status = parts[1]:sub(1, 1)
-          local path = unquote_path(parts[2])
-          local old_path = nil
-
-          -- Handle renames (R100 or similar)
-          if status == "R" and #parts >= 3 then
-            old_path = unquote_path(parts[2])
-            path = unquote_path(parts[3])
-          end
-
-          table.insert(result.unstaged, {
-            path = path,
-            status = status,
-            old_path = old_path,
-          })
-        end
-      end
-    end
+    result.unstaged = parse_name_status(output)
 
     -- Untracked files (#389): they don't exist in the revision, so they're "new".
     -- `no`   -> skip the recursive ls-files scan entirely (the hang fix for huge
@@ -222,46 +201,13 @@ function M.get_diff_revisions(rev1, rev2, git_root, callback, pathspec)
       staged = {},
     }
 
-    -- For revision comparison, we treat everything as "unstaged" for explorer compatibility
-    -- But to keep explorer compatible, we'll put them in 'staged' as they are committed changes
-    -- relative to each other.
-
-    for line in output:gmatch("[^\r\n]+") do
-      if #line > 0 then
-        local parts = vim.split(line, "\t")
-        if #parts >= 2 then
-          local status = parts[1]:sub(1, 1)
-          local path = unquote_path(parts[2])
-          local old_path = nil
-
-          -- Handle renames (R100 or similar)
-          if status == "R" and #parts >= 3 then
-            old_path = unquote_path(parts[2])
-            path = unquote_path(parts[3])
-          end
-
-          table.insert(result.unstaged, {
-            path = path,
-            status = status,
-            old_path = old_path,
-          })
-        end
-      end
-    end
+    result.unstaged = parse_name_status(output)
 
     callback(nil, result)
   end)
 end
 
--- Get staged changes vs a revision (async) — the equivalent of diffview's
--- `--staged`/`--cached` filter: `git diff --cached --name-status -M <revision>`.
--- Only files whose index copy differs from `revision` are returned. Entries
--- go into `result.staged` so the `-` toggle key unstages them and the tree
--- renders them under the "Staged Changes" header.
---
--- revision: git revision (e.g., "HEAD"), the base to compare the index against
--- git_root: absolute path to git repository root
--- callback: function(err, status_result)
+-- Index changes belong in result.staged so the explorer's toggle key unstages them.
 function M.get_diff_staged(revision, git_root, callback, pathspec)
   run_git_async(vim.list_extend({ "diff", "--cached", "--name-status", "-M", revision, "--" }, pathspec or {}), { cwd = git_root }, function(err, output)
     if err then
@@ -275,27 +221,7 @@ function M.get_diff_staged(revision, git_root, callback, pathspec)
       conflicts = {},
     }
 
-    for line in output:gmatch("[^\r\n]+") do
-      if #line > 0 then
-        local parts = vim.split(line, "\t")
-        if #parts >= 2 then
-          local status = parts[1]:sub(1, 1)
-          local path = unquote_path(parts[2])
-          local old_path = nil
-
-          if status == "R" and #parts >= 3 then
-            old_path = unquote_path(parts[2])
-            path = unquote_path(parts[3])
-          end
-
-          table.insert(result.staged, {
-            path = path,
-            status = status,
-            old_path = old_path,
-          })
-        end
-      end
-    end
+    result.staged = parse_name_status(output)
 
     callback(nil, result)
   end)
@@ -313,27 +239,7 @@ function M.get_commit_files(commit_hash, git_root, callback)
       return
     end
 
-    local files = {}
-    for line in output:gmatch("[^\n]+") do
-      local parts = vim.split(line, "\t")
-      if #parts >= 2 then
-        local status = parts[1]:sub(1, 1)
-        local path = unquote_path(parts[2])
-        local old_path = nil
-
-        -- Handle renames (R100 or similar)
-        if status == "R" and #parts >= 3 then
-          old_path = unquote_path(parts[2])
-          path = unquote_path(parts[3])
-        end
-
-        table.insert(files, {
-          path = path,
-          status = status,
-          old_path = old_path,
-        })
-      end
-    end
+    local files = parse_name_status(output, "[^\n]+")
 
     callback(nil, files)
   end)
