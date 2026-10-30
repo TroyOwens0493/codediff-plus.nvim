@@ -54,6 +54,36 @@ were removed to reduce the count.
 The 50% target remains unmet. Keep the verified reductions. Larger reductions
 must retain clear ownership and explicit buffer-lifetime rules.
 
+### Follow-up from `9c7a51a`
+
+The next pass removes another 1,010 production Lua lines. Production now has
+30,378 lines: 22,484 Lua and 7,894 C. This is a 3.2% reduction from the previous
+31,388 lines. The total reduction from `ddcac4e` is 3,302 lines (9.8%).
+
+Creation, file switches, and one-sided previews share session publication and
+rendering code. Inline snapshots and visible revision buffers keep separate
+loading paths. Existing module paths remain as small forwarding modules.
+Keymap release and suspend/resume share their repeated steps. Argument
+setters, conflict alignment, history row padding, sign colors, and panel help
+also share repeated logic. Long key-ownership comments were shortened while
+retaining the ownership rules.
+
+This pass falls short of the 1,500-line target. Further unifying the loading
+paths would require more state flags and would make ownership harder to read.
+The refresh controller and guided-review state machine retain their separate
+generation and cancellation rules.
+
+Two regression cases cover existing lifecycle faults found during the work.
+Inline hunk actions now use the current original buffer after a file switch.
+A delayed merge-base callback now checks that the view still exists. Each
+case fails with the previous creator and passes with the shared creator.
+
+Validation: all 129 spec files pass. A separate comparison against `9c7a51a`
+passes 1,018 cases: 500 Unicode/multiline filler renders, 500 merge-alignment
+results, and 18 selected/unselected history rows at different widths.
+StyLua and whitespace checks pass. No features, test cases, or public module
+entry points were removed. Native code and vendor files remain unchanged.
+
 The sections below record the earlier module-splitting plan.
 
 
