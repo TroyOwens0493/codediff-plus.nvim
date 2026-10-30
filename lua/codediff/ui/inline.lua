@@ -5,7 +5,6 @@ local M = {}
 local config = require("codediff.config")
 local highlights = require("codediff.ui.highlights")
 local gutter_signs = require("codediff.ui.gutter_signs")
-local compat = require("codediff.core.compat")
 local char_highlights = require("codediff.ui.char_highlights")
 
 -- Dedicated namespace for inline diff (separate from side-by-side namespaces)
@@ -17,9 +16,7 @@ local virt_lines_overflow = vim.fn.has("nvim-0.11") == 1 and "scroll" or nil
 -- Cache for merged highlight groups (syntax fg + diff bg)
 local merged_hl_cache = {}
 
--- ============================================================================
 -- Syntax highlighting for virt_lines via treesitter
--- ============================================================================
 
 -- Get or create a merged highlight group combining syntax fg with diff bg
 -- @param syntax_hl string: treesitter highlight group (e.g., "@keyword")
@@ -89,27 +86,14 @@ function M.compute_syntax_highlights(lines, filetype)
     local r1, c1, r2, c2 = node:range()
     local hl_group = "@" .. query.captures[id]
 
-    -- Handle single-line captures
-    if r1 == r2 then
-      local line_num = r1 + 1 -- 1-based
-      if not result[line_num] then
-        result[line_num] = {}
-      end
-      table.insert(result[line_num], { start_col = c1 + 1, end_col = c2, hl_group = hl_group })
-    else
-      -- Multi-line capture: split across lines
-      for row = r1, r2 do
-        local line_num = row + 1
-        local line_text = lines[line_num] or ""
-        if not result[line_num] then
-          result[line_num] = {}
-        end
-
-        local sc = (row == r1) and (c1 + 1) or 1
-        local ec = (row == r2) and c2 or #line_text
-        if ec >= sc then
-          table.insert(result[line_num], { start_col = sc, end_col = ec, hl_group = hl_group })
-        end
+    -- Split captures into per-line byte spans, including empty single-line captures.
+    for row = r1, r2 do
+      local line = row + 1
+      result[line] = result[line] or {}
+      local first = row == r1 and c1 + 1 or 1
+      local last = row == r2 and c2 or #(lines[line] or "")
+      if r1 == r2 or last >= first then
+        table.insert(result[line], { start_col = first, end_col = last, hl_group = hl_group })
       end
     end
   end
@@ -124,24 +108,11 @@ function M.compute_syntax_highlights(lines, filetype)
   return result
 end
 
--- ============================================================================
 -- Helper: UTF-16 to byte column conversion (shared with ui/core.lua)
--- ============================================================================
 
-local function utf16_col_to_byte_col(line, utf16_col)
-  if not line or utf16_col <= 1 then
-    return utf16_col
-  end
-  local ok, byte_idx = pcall(compat.str_byteindex_utf16, line, utf16_col - 1)
-  if ok then
-    return byte_idx + 1
-  end
-  return utf16_col
-end
+local utf16_col_to_byte_col = char_highlights.byte_column
 
--- ============================================================================
 -- Build virtual line chunks with character-level highlights
--- ============================================================================
 
 -- Build a single virt_line entry with char-level diff highlighting and syntax colors
 -- line_text: the original (deleted) line text
@@ -215,9 +186,7 @@ local function build_highlighted_virt_line(line_text, char_ranges, syntax_hls, b
   return chunks
 end
 
--- ============================================================================
 -- Extract char-level ranges for a specific original line from inner_changes
--- ============================================================================
 
 -- Given inner_changes and a 1-based original line number, extract byte-position
 -- ranges on that line that have character-level deletions.
@@ -290,109 +259,15 @@ local function get_char_ranges_for_orig_line(inner_changes, orig_line_1based, or
   return #ranges > 0 and ranges or nil
 end
 
--- ============================================================================
 -- Apply char-level highlights on modified buffer lines
--- ============================================================================
 
 local function apply_modified_char_highlights(bufnr, inner_changes, modified_lines)
-  if not inner_changes then
-    return
-  end
-
-  if config.options.highlights.char_whole_line == false then
-    for _, inner in ipairs(inner_changes) do
-      char_highlights.each_partial_range(inner.modified, modified_lines, function(row, start_col, end_col)
-        pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_inline, row, start_col, {
-          end_col = end_col,
-          hl_group = "CodeDiffCharInsert",
-          priority = 200,
-        })
-      end)
-    end
-    return
-  end
-
-  local buf_line_count = vim.api.nvim_buf_line_count(bufnr)
-
-  for _, inner in ipairs(inner_changes) do
-    local mod = inner.modified
-    if not mod then
-      goto continue
-    end
-
-    -- Empty range check
-    if mod.start_line == mod.end_line and mod.start_col == mod.end_col then
-      goto continue
-    end
-
-    local start_line = mod.start_line
-    local end_line = mod.end_line
-    local start_col = mod.start_col
-    local end_col = mod.end_col
-
-    if start_line > buf_line_count or end_line > buf_line_count then
-      goto continue
-    end
-
-    -- Convert UTF-16 columns to byte positions
-    if start_line >= 1 and start_line <= #modified_lines then
-      start_col = utf16_col_to_byte_col(modified_lines[start_line], start_col)
-    end
-    if end_line >= 1 and end_line <= #modified_lines then
-      end_col = utf16_col_to_byte_col(modified_lines[end_line], end_col)
-      end_col = math.min(end_col, #modified_lines[end_line] + 1)
-    end
-
-    if start_line == end_line then
-      local line_idx = start_line - 1
-      if line_idx >= 0 then
-        pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_inline, line_idx, start_col - 1, {
-          end_col = end_col - 1,
-          hl_group = "CodeDiffCharInsert",
-          priority = 200,
-        })
-      end
-    else
-      -- Multi-line char highlight
-      local first_idx = start_line - 1
-      if first_idx >= 0 then
-        pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_inline, first_idx, start_col - 1, {
-          end_line = first_idx + 1,
-          end_col = 0,
-          hl_group = "CodeDiffCharInsert",
-          priority = 200,
-        })
-      end
-      for line = start_line + 1, end_line - 1 do
-        local idx = line - 1
-        if idx >= 0 and line <= buf_line_count then
-          pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_inline, idx, 0, {
-            end_line = idx + 1,
-            end_col = 0,
-            hl_group = "CodeDiffCharInsert",
-            priority = 200,
-          })
-        end
-      end
-      if end_col > 1 or end_line ~= start_line then
-        local last_idx = end_line - 1
-        if last_idx >= 0 and last_idx ~= first_idx and end_line <= buf_line_count then
-          pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_inline, last_idx, 0, {
-            end_col = end_col - 1,
-            hl_group = "CodeDiffCharInsert",
-            priority = 200,
-          })
-        end
-      end
-    end
-
-    ::continue::
+  for _, inner in ipairs(inner_changes or {}) do
+    char_highlights.apply(bufnr, M.ns_inline, inner.modified, "CodeDiffCharInsert", modified_lines)
   end
 end
 
--- ============================================================================
 -- Main Rendering Function
--- ============================================================================
 
 -- Render inline diff on a single buffer (the modified buffer)
 -- Deleted lines appear as virtual lines above the corresponding modified position
@@ -476,7 +351,7 @@ function M.render_inline_diff(bufnr, diff_result, original_lines, modified_lines
 
     -- Step 2: Highlight added/modified lines on the real buffer
     if has_modified then
-      local hl_group = has_original and "CodeDiffLineInsert" or "CodeDiffLineInsert"
+      local hl_group = "CodeDiffLineInsert"
 
       for line = mod_start, mod_end - 1 do
         if line > buf_line_count then
@@ -501,9 +376,7 @@ function M.render_inline_diff(bufnr, diff_result, original_lines, modified_lines
   end
 end
 
--- ============================================================================
 -- Clear inline diff decorations
--- ============================================================================
 
 function M.clear(bufnr)
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) then

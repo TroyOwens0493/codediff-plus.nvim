@@ -10,13 +10,7 @@ local welcome_window = require("codediff.ui.view.welcome_window")
 
 local show_real_file_buffer = helpers.show_real_file_buffer
 
---- True when the pane already shows exactly what this call would render.
---- Explorer refreshes re-select the file that is already open. For real diffs
---- on_file_select short-circuits that, but untracked/added/deleted files return
---- before reaching its guard, so the window was torn down and rebuilt on every
---- refresh, and the layout pass at the end of the rebuild discarded any pane
---- the user had resized. Comparing the displayed buffer covers path and
---- revision at once, since virtual revisions resolve to distinct buffers.
+--- Re-selecting an unchanged one-sided file must preserve the user's pane size.
 ---@param session table
 ---@param opts table
 ---@return boolean
@@ -68,12 +62,8 @@ local function show_single_file(tabpage, opts)
   -- Mark single-pane BEFORE closing window (prevents cleanup trigger)
   session.single_pane = true
 
-  -- Leaving conflict mode: close the result window too, mirroring M.update.
-  -- Without this the 3rd conflict pane survives under the single-file view, and
-  -- returning to the conflict file reuses that stale window whose buffer still
-  -- has unsaved merge edits, so `:edit` fails with E37. Closing is forced so it
-  -- also works when 'hidden' is off; the buffer only becomes hidden, never
-  -- unloaded, so in-progress merge edits are preserved.
+  -- Hide the old Result pane without unloading its buffer, preserving merge edits.
+  -- Force close so this also works with 'hidden' off.
   local _, old_result_win = lifecycle.get_result(tabpage)
   if old_result_win and vim.api.nvim_win_is_valid(old_result_win) then
     vim.w[old_result_win].codediff_restore = nil
@@ -97,11 +87,8 @@ local function show_single_file(tabpage, opts)
     close_win = nil
   end
 
-  -- Load the file into the kept window BEFORE closing the other one. Virtual
-  -- buffers (from load_virtual_file) carry `bufhidden = "wipe"` so they get
-  -- wiped as soon as they have no window; closing close_win first would leave
-  -- the freshly-created virtual buffer with no window, wiping it before we can
-  -- set it into keep_win — producing "Invalid buffer id" (#498).
+  -- Show the new buffer before closing its old window: virtual buffers use
+  -- bufhidden=wipe and would otherwise disappear before the transfer (#498).
   if keep_win and vim.api.nvim_win_is_valid(keep_win) then
     show_real_file_buffer(keep_win, opts.load_bufnr)
   end
@@ -169,57 +156,29 @@ local function load_virtual_file(git_root, revision, file_path)
   return bufnr
 end
 
---- Show an untracked file (status "??") — modified pane only
+-- Virtual buffers use the repository-relative path for loading. The session
+-- can retain a different path spelling, as it does for working-tree deletions.
+local function show_virtual(tabpage, git_root, file_path, revision, side, session_path)
+  local opts = { keep = side, load_bufnr = load_virtual_file(git_root, revision, file_path) }
+  opts[side .. "_path"] = session_path or file_path
+  opts[side .. "_revision"] = revision
+  show_single_file(tabpage, opts)
+end
+
 function M.show_untracked_file(tabpage, file_path)
-  show_single_file(tabpage, {
-    keep = "modified",
-    load_bufnr = load_real_file(file_path),
-    file_path = file_path,
-    modified_path = file_path,
-  })
+  show_single_file(tabpage, { keep = "modified", load_bufnr = load_real_file(file_path), modified_path = file_path })
 end
 
---- Show a deleted file (status "D", working tree) — original pane only
 function M.show_deleted_file(tabpage, git_root, file_path, abs_path, group)
-  local revision = (group == "staged") and "HEAD" or ":0"
-  show_single_file(tabpage, {
-    keep = "original",
-    load_bufnr = load_virtual_file(git_root, revision, file_path),
-    file_path = abs_path,
-    load_revision = revision,
-    load_git_root = git_root,
-    rel_path = file_path,
-    original_path = abs_path,
-    original_revision = revision,
-  })
+  show_virtual(tabpage, git_root, file_path, group == "staged" and "HEAD" or ":0", "original", abs_path)
 end
 
---- Show an added virtual file (status "A") — modified pane only
 function M.show_added_virtual_file(tabpage, git_root, file_path, revision)
-  show_single_file(tabpage, {
-    keep = "modified",
-    load_bufnr = load_virtual_file(git_root, revision, file_path),
-    file_path = file_path,
-    load_revision = revision,
-    load_git_root = git_root,
-    rel_path = file_path,
-    modified_path = file_path,
-    modified_revision = revision,
-  })
+  show_virtual(tabpage, git_root, file_path, revision, "modified")
 end
 
---- Show a deleted virtual file (status "D", two-revision mode) — original pane only
 function M.show_deleted_virtual_file(tabpage, git_root, file_path, revision)
-  show_single_file(tabpage, {
-    keep = "original",
-    load_bufnr = load_virtual_file(git_root, revision, file_path),
-    file_path = file_path,
-    load_revision = revision,
-    load_git_root = git_root,
-    rel_path = file_path,
-    original_path = file_path,
-    original_revision = revision,
-  })
+  show_virtual(tabpage, git_root, file_path, revision, "original")
 end
 
 --- Show the welcome page in a single pane (modified side)

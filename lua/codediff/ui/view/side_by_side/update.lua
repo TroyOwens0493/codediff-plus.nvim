@@ -77,32 +77,7 @@ local function render_when_reloaded(tabpage, original_info, modified_info, wait_
   if wait_state.modified then
     awaited[#awaited + 1] = "modified"
   end
-  if #awaited == 0 then
-    return
-  end
-
-  local group = vim.api.nvim_create_augroup("CodeDiffVirtualFileUpdate_" .. tabpage, { clear = true })
-  local ready = readiness.when_all(awaited, function()
-    vim.schedule(render)
-    vim.api.nvim_del_augroup_by_id(group)
-  end)
-
-  vim.api.nvim_create_autocmd("User", {
-    group = group,
-    pattern = "CodeDiffVirtualFileLoaded",
-    callback = function(event)
-      local buf = event.data and event.data.buf
-      if not buf then
-        return
-      end
-      if buf == original_info.bufnr then
-        ready.done("original")
-      end
-      if buf == modified_info.bufnr then
-        ready.done("modified")
-      end
-    end,
-  })
+  readiness.when_virtual_loaded("CodeDiffVirtualFileUpdate_" .. tabpage, { original = original_info, modified = modified_info }, awaited, render, false)
 end
 
 ---@param tabpage number

@@ -50,5 +50,34 @@ function M.when_all(names, on_ready)
     end,
   }
 end
+-- Register before loading starts. Info tables are read at event time because
+-- :edit can replace their buffer handles while an asynchronous read is pending.
+function M.when_virtual_loaded(group_name, infos, awaited, render, schedule_empty)
+  if #awaited == 0 then
+    if schedule_empty then
+      vim.schedule(render)
+    end
+    return
+  end
+  local group = vim.api.nvim_create_augroup(group_name, { clear = true })
+  local ready = M.when_all(awaited, function()
+    vim.schedule(render)
+    vim.api.nvim_del_augroup_by_id(group)
+  end)
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeDiffVirtualFileLoaded",
+    callback = function(event)
+      local buf = event.data and event.data.buf
+      if buf then
+        for _, side in ipairs(awaited) do
+          if buf == infos[side].bufnr then
+            ready.done(side)
+          end
+        end
+      end
+    end,
+  })
+end
 
 return M

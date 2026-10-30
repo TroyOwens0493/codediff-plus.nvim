@@ -40,10 +40,7 @@ local function bufnr_exact(name)
   return -1
 end
 
--- Prepare buffer information for loading
--- Returns: { bufnr = number?, target = string?, needs_edit = boolean }
--- - If buffer already exists: { bufnr = 123, target = nil, needs_edit = false }
--- - If needs :edit: { bufnr = nil, target = "path or url", needs_edit = true }
+-- Return a buffer to reuse, or an edit target to load. Mutable Git stages always reload.
 ---@param is_virtual boolean
 ---@param git_root string?
 ---@param revision string?
@@ -55,68 +52,21 @@ function M.prepare_buffer(is_virtual, git_root, revision, ref)
     vim.bo[buf].bufhidden = "wipe"
     return { bufnr = buf, needs_edit = false }
   end
-  if is_virtual then
-    -- Virtual file: generate URL from the repo-relative path
-    local virtual_url = virtual_file.create_url(git_root, revision, ref.relative)
-    -- Check if buffer already exists (exact match to avoid prefix collisions)
-    local existing_buf = bufnr_exact(virtual_url)
-
-    -- For :0 (staged index), always force reload because index can change
-    -- when user runs git add/reset. For commits (immutable), we can cache.
-    local is_mutable_revision = revision == ":0" or revision == ":1" or revision == ":2" or revision == ":3"
-
-    if existing_buf ~= -1 and not is_mutable_revision then
-      -- Buffer exists for immutable revision, reuse it
-      return {
-        bufnr = existing_buf,
-        target = virtual_url,
-        needs_edit = false,
-      }
-    else
-      -- Either buffer doesn't exist, or it's a mutable revision that needs refresh
-      -- Don't delete here - let the :edit! handle it (will trigger BufReadCmd)
-      return {
-        bufnr = existing_buf ~= -1 and existing_buf or nil,
-        target = virtual_url,
-        needs_edit = true,
-      }
-    end
-  else
-    -- Real file: use exact match for buffer lookup by absolute path
-    local existing_buf = bufnr_exact(ref.absolute)
-    if existing_buf ~= -1 then
-      -- Buffer already exists, reuse it
-      return {
-        bufnr = existing_buf,
-        target = nil,
-        needs_edit = false,
-      }
-    else
-      -- Buffer doesn't exist, need to :edit it
-      return {
-        bufnr = nil,
-        target = ref.absolute,
-        needs_edit = true,
-      }
-    end
-  end
+  local target = is_virtual and virtual_file.create_url(git_root, revision, ref.relative) or ref.absolute
+  local existing = bufnr_exact(target)
+  -- Index and merge stages can change; commits can reuse their buffer contents.
+  local mutable = is_virtual and (revision == ":0" or revision == ":1" or revision == ":2" or revision == ":3")
+  local needs_edit = existing == -1 or mutable
+  return {
+    bufnr = existing ~= -1 and existing or nil,
+    target = (is_virtual or needs_edit) and target or nil,
+    needs_edit = needs_edit,
+  }
 end
 
---- Display a real-file buffer in a window, re-syncing it with disk first.
----
---- Neovim runs a timestamp check whenever a buffer becomes visible. When the
---- file was deleted behind our back (branch switch, `git stash`, external `rm`)
---- that check emits `E211: File ... no longer available`; worse, it can surface
---- as an error out of `nvim_win_set_buf` and abort view construction halfway.
----
---- Running the check ourselves beforehand reloads the buffer when the file
---- really did change and clears the pending check either way, so the display
---- below stays quiet. `:checktime {buf}` is scoped to this buffer — a bare
---- `:checktime` walks every loaded buffer and would reload unrelated files.
---- `silent!` is required on top of `pcall`: for a buffer that is (or is about
---- to be) displayed, `:checktime` *reports* `E211` rather than raising it, so
---- `pcall` alone does not suppress it. A missing file has nothing to reload;
---- the deletion is picked up by the refresh that follows.
+--- Check this buffer's timestamp before showing it. silent! suppresses E211
+--- for files deleted outside Neovim; changed files still reload. Scope checktime
+--- to this buffer so it does not reload unrelated files.
 ---@param win number Window handle
 ---@param bufnr number Buffer handle backed by a real file on disk
 function M.show_real_file_buffer(win, bufnr)
@@ -138,17 +88,9 @@ function M.show_real_file_buffer(win, bufnr)
   vim.api.nvim_win_set_buf(win, bufnr)
 end
 
---- Load a real file into a buffer and display it in `win`.
----
---- Uses `:edit` rather than `bufload()` for a not-yet-loaded buffer on purpose:
---- a buffer loaded outside of any window and then displayed comes back marked
---- `'modified'`, which makes Neovim refuse to ever reload it from disk (W12).
----
---- When the buffer already exists it is reused as-is: `bufadd` resolves
---- `target` to the exact buffer Neovim would pick even when the path is spelled
---- differently (a symlinked directory such as macOS `/tmp`, a `./` segment),
---- which is precisely the case where `:edit` would fail with `E211` for a file
---- that has since been deleted.
+--- Load and show a real file. Use :edit for new buffers: bufload followed by
+--- display can mark them modified and prevent later reloads. Reuse loaded
+--- buffers to handle equivalent path spellings and deleted files without E211.
 ---@param win number Window handle
 ---@param target string Absolute path of the file to load
 ---@return number bufnr
@@ -211,6 +153,21 @@ function M.update_content(session, side, input, lines)
   virtual_file.set_content(buf, lines, input.path.relative)
   session[side .. "_revision"] = input.resolved
   return buf
+end
+
+function M.load_visible_side(win, info, is_virtual)
+  if is_virtual then
+    if info.needs_edit then
+      vim.cmd("edit! " .. vim.fn.fnameescape(info.target))
+      info.bufnr = vim.api.nvim_get_current_buf()
+    else
+      vim.api.nvim_win_set_buf(win, info.bufnr)
+    end
+  elseif info.needs_edit then
+    info.bufnr = M.open_real_file(win, info.target)
+  else
+    M.show_real_file_buffer(win, info.bufnr)
+  end
 end
 
 return M

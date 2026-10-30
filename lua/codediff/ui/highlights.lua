@@ -50,24 +50,13 @@ local function resolve_color(value, fallback_gui, fallback_cterm)
   -- If it's a string, check if it's a hex color or highlight group name
   if type(value) == "string" then
     -- Check if it's a hex color (#RRGGBB or #RGB)
-    if value:match("^#%x%x%x%x%x%x$") then
-      -- #RRGGBB format
-      local r = tonumber(value:sub(2, 3), 16)
-      local g = tonumber(value:sub(4, 5), 16)
-      local b = tonumber(value:sub(6, 7), 16)
-      return {
-        bg = r * 65536 + g * 256 + b,
-        ctermbg = fallback_cterm,
-      }
-    elseif value:match("^#%x%x%x$") then
-      -- #RGB format - expand to #RRGGBB
-      local r = tonumber(value:sub(2, 2), 16) * 17
-      local g = tonumber(value:sub(3, 3), 16) * 17
-      local b = tonumber(value:sub(4, 4), 16) * 17
-      return {
-        bg = r * 65536 + g * 256 + b,
-        ctermbg = fallback_cterm,
-      }
+    local hex = value:match("^#(%x%x%x%x%x%x)$")
+    local short = value:match("^#(%x%x%x)$")
+    if hex or short then
+      if short then
+        hex = short:gsub(".", "%0%0")
+      end
+      return { bg = tonumber(hex, 16), ctermbg = fallback_cterm }
     else
       -- Assume it's a highlight group name
       local hl = vim.api.nvim_get_hl(0, { name = value, link = false })
@@ -139,33 +128,15 @@ function M.setup()
   vim.api.nvim_set_hl(0, "CodeDiffLineDelete", line_delete_color)
 
   -- Character-level highlights: use explicit values if provided, otherwise derive from line highlights
-  local char_insert_color
-  local char_delete_color
-
-  -- Auto-detect brightness based on background if not explicitly set
   local brightness = opts.char_brightness or (vim.o.background == "light" and 0.92 or 1.4)
-
-  if opts.char_insert then
-    -- Explicit char_insert provided - use it directly
-    char_insert_color = resolve_char_highlight(opts.char_insert, 0x2a4556, base256_color(0, 2, 0))
-  else
-    -- Derive from line_insert with brightness adjustment
-    char_insert_color = {
-      bg = adjust_brightness(line_insert_color.bg, brightness) or 0x2a4556,
-      ctermbg = base256_color(0, 2, 0),
-    }
+  local function character_color(value, line, fallback, cterm)
+    if value then
+      return resolve_char_highlight(value, fallback, cterm)
+    end
+    return { bg = adjust_brightness(line.bg, brightness) or fallback, ctermbg = cterm }
   end
-
-  if opts.char_delete then
-    -- Explicit char_delete provided - use it directly
-    char_delete_color = resolve_char_highlight(opts.char_delete, 0x4b2a3d, base256_color(2, 0, 0))
-  else
-    -- Derive from line_delete with brightness adjustment
-    char_delete_color = {
-      bg = adjust_brightness(line_delete_color.bg, brightness) or 0x4b2a3d,
-      ctermbg = base256_color(2, 0, 0),
-    }
-  end
+  local char_insert_color = character_color(opts.char_insert, line_insert_color, 0x2a4556, base256_color(0, 2, 0))
+  local char_delete_color = character_color(opts.char_delete, line_delete_color, 0x4b2a3d, base256_color(2, 0, 0))
 
   vim.api.nvim_set_hl(0, "CodeDiffCharInsert", char_insert_color)
   vim.api.nvim_set_hl(0, "CodeDiffCharDelete", char_delete_color)
@@ -216,36 +187,21 @@ function M.setup()
     default = true,
   })
 
-  -- Explorer directory text (smaller and dimmed)
-  vim.api.nvim_set_hl(0, "ExplorerDirectorySmall", {
-    link = "Comment",
-    default = true,
-  })
-
-  -- Explorer selected file
-  vim.api.nvim_set_hl(0, "CodeDiffExplorerSelected", {
-    link = "Visual",
-    default = true,
-  })
-
-  -- Explorer indent markers (tree view)
-  vim.api.nvim_set_hl(0, "NeoTreeIndentMarker", {
-    link = "Comment",
-    default = true,
-  })
-
-  vim.api.nvim_set_hl(0, "CodeDiffExplorerTreeGroup", {
-    link = "Directory",
-    default = true,
-  })
-
-  -- Explorer git status highlights (customizable, like diffview.nvim)
-  vim.api.nvim_set_hl(0, "CodeDiffStatusAdded", { link = "DiagnosticOk", default = true })
-  vim.api.nvim_set_hl(0, "CodeDiffStatusModified", { link = "DiagnosticWarn", default = true })
-  vim.api.nvim_set_hl(0, "CodeDiffStatusDeleted", { link = "DiagnosticError", default = true })
-  vim.api.nvim_set_hl(0, "CodeDiffStatusRenamed", { link = "DiagnosticInfo", default = true })
-  vim.api.nvim_set_hl(0, "CodeDiffStatusUntracked", { link = "DiagnosticInfo", default = true })
-  vim.api.nvim_set_hl(0, "CodeDiffStatusConflict", { link = "DiagnosticError", default = true })
+  -- These are defaults so user-defined groups retain their settings.
+  for name, link in pairs({
+    ExplorerDirectorySmall = "Comment",
+    CodeDiffExplorerSelected = "Visual",
+    NeoTreeIndentMarker = "Comment",
+    CodeDiffExplorerTreeGroup = "Directory",
+    CodeDiffStatusAdded = "DiagnosticOk",
+    CodeDiffStatusModified = "DiagnosticWarn",
+    CodeDiffStatusDeleted = "DiagnosticError",
+    CodeDiffStatusRenamed = "DiagnosticInfo",
+    CodeDiffStatusUntracked = "DiagnosticInfo",
+    CodeDiffStatusConflict = "DiagnosticError",
+  }) do
+    vim.api.nvim_set_hl(0, name, { link = link, default = true })
+  end
 
   -- Helper to check if a highlight group exists and has foreground color
   local function hl_exists(name)

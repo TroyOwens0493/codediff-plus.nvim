@@ -5,7 +5,6 @@ local config = require("codediff.config")
 local highlights = require("codediff.ui.highlights")
 local filler_renderer = require("codediff.ui.filler")
 local gutter_signs = require("codediff.ui.gutter_signs")
-local compat = require("codediff.core.compat")
 local char_highlights = require("codediff.ui.char_highlights")
 
 -- Namespace references
@@ -13,9 +12,7 @@ local ns_highlight = highlights.ns_highlight
 local ns_filler = highlights.ns_filler
 local ns_conflict = highlights.ns_conflict
 
--- ============================================================================
 -- Helper Functions
--- ============================================================================
 
 -- Check if a range is empty (start and end are the same position)
 local function is_empty_range(range)
@@ -31,9 +28,7 @@ local function is_past_line_content(line_number, column, lines)
   return column > #line_content
 end
 
--- ============================================================================
 -- Step 1: Line-Level Highlights
--- ============================================================================
 
 local function apply_line_highlights(bufnr, line_range, hl_group)
   local start_row = line_range.start_line - 1
@@ -52,125 +47,34 @@ local function apply_line_highlights(bufnr, line_range, hl_group)
   })
 end
 
--- ============================================================================
 -- Step 2: Character-Level Highlights
--- ============================================================================
 
--- Convert UTF-16 code unit offset to UTF-8 byte offset
--- The diff algorithm returns UTF-16 positions (VSCode/JavaScript native)
--- but Neovim expects byte positions for highlighting
--- For ASCII text, UTF-16 index equals byte index (no change)
--- utf16_col: 1-based UTF-16 code unit position
--- Returns: 1-based byte position
-local function utf16_col_to_byte_col(line, utf16_col)
-  if not line or utf16_col <= 1 then
-    return utf16_col
+local function apply_char_highlight(bufnr, range, group, lines)
+  -- The side-by-side renderer ignores spans starting beyond the visible text.
+  -- Inline rendering retains its own historical clipping behavior.
+  if config.options.highlights.char_whole_line ~= false and is_past_line_content(range.start_line, range.start_col, lines) then
+    return
   end
-  -- vim.str_byteindex uses 0-based indexing, our columns are 1-based
-  local ok, byte_idx = pcall(compat.str_byteindex_utf16, line, utf16_col - 1)
-  if ok then
-    return byte_idx + 1
-  end
-  -- Fallback: return original column if conversion fails
-  return utf16_col
+  char_highlights.apply(bufnr, ns_highlight, range, group, lines)
 end
 
-local function apply_char_highlight(bufnr, char_range, hl_group, lines)
-  if config.options.highlights.char_whole_line == false then
-    char_highlights.each_partial_range(char_range, lines, function(row, start_col, end_col)
-      pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_highlight, row, start_col, {
-        end_col = end_col,
-        hl_group = hl_group,
-        priority = 200,
-      })
-    end)
+local function highlight_mapping(bufnr, mapping, side, lines)
+  local range = mapping[side]
+  if not range then
     return
   end
-
-  local start_line = char_range.start_line
-  local start_col = char_range.start_col
-  local end_line = char_range.end_line
-  local end_col = char_range.end_col
-
-  if is_empty_range(char_range) then
-    return
+  local suffix = side == "original" and "Delete" or "Insert"
+  if range.end_line > range.start_line then
+    apply_line_highlights(bufnr, range, "CodeDiffLine" .. suffix)
   end
-
-  if is_past_line_content(start_line, start_col, lines) then
-    return
-  end
-
-  -- Convert UTF-16 column positions to byte positions for Neovim
-  if start_line >= 1 and start_line <= #lines then
-    local line_content = lines[start_line]
-    start_col = utf16_col_to_byte_col(line_content, start_col)
-  end
-
-  if end_line >= 1 and end_line <= #lines then
-    local line_content = lines[end_line]
-    end_col = utf16_col_to_byte_col(line_content, end_col)
-    end_col = math.min(end_col, #line_content + 1)
-  end
-
-  -- Verify buffer has enough lines (buffer may have changed since diff was computed)
-  local buf_line_count = vim.api.nvim_buf_line_count(bufnr)
-  if start_line > buf_line_count or end_line > buf_line_count then
-    return
-  end
-
-  if start_line == end_line then
-    local line_idx = start_line - 1
-    if line_idx >= 0 then
-      -- Additional safety: verify column is within current buffer line length
-      local ok = pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_highlight, line_idx, start_col - 1, {
-        end_col = end_col - 1,
-        hl_group = hl_group,
-        priority = 200,
-      })
-      if not ok then
-        -- Column out of range, skip this highlight
-        return
-      end
-    end
-  else
-    local first_line_idx = start_line - 1
-    if first_line_idx >= 0 then
-      pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_highlight, first_line_idx, start_col - 1, {
-        end_line = first_line_idx + 1,
-        end_col = 0,
-        hl_group = hl_group,
-        priority = 200,
-      })
-    end
-
-    for line = start_line + 1, end_line - 1 do
-      local line_idx = line - 1
-      if line_idx >= 0 and line <= buf_line_count then
-        pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_highlight, line_idx, 0, {
-          end_line = line_idx + 1,
-          end_col = 0,
-          hl_group = hl_group,
-          priority = 200,
-        })
-      end
-    end
-
-    if end_col > 1 or end_line ~= start_line then
-      local last_line_idx = end_line - 1
-      if last_line_idx >= 0 and last_line_idx ~= first_line_idx and end_line <= buf_line_count then
-        pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_highlight, last_line_idx, 0, {
-          end_col = end_col - 1,
-          hl_group = hl_group,
-          priority = 200,
-        })
-      end
+  for _, inner in ipairs(mapping.inner_changes or {}) do
+    if inner[side] and not is_empty_range(inner[side]) then
+      apply_char_highlight(bufnr, inner[side], "CodeDiffChar" .. suffix, lines)
     end
   end
 end
 
--- ============================================================================
 -- Step 3: Filler Line Calculation
--- ============================================================================
 
 local function calculate_fillers(mapping, original_lines, _modified_lines, last_orig_line, last_mod_line)
   local fillers = {}
@@ -286,9 +190,7 @@ local function calculate_fillers(mapping, original_lines, _modified_lines, last_
   return fillers, last_orig_line, last_mod_line
 end
 
--- ============================================================================
 -- Main Rendering Function
--- ============================================================================
 
 -- Render diff highlights and fillers
 -- Assumes buffer content is already set by caller
@@ -307,28 +209,8 @@ function M.render_diff(left_bufnr, right_bufnr, original_lines, modified_lines, 
   local last_mod_line = 1
 
   for _, mapping in ipairs(lines_diff.changes) do
-    local orig_is_empty = (mapping.original.end_line <= mapping.original.start_line)
-    local mod_is_empty = (mapping.modified.end_line <= mapping.modified.start_line)
-
-    if not orig_is_empty then
-      apply_line_highlights(left_bufnr, mapping.original, "CodeDiffLineDelete")
-    end
-
-    if not mod_is_empty then
-      apply_line_highlights(right_bufnr, mapping.modified, "CodeDiffLineInsert")
-    end
-
-    if mapping.inner_changes then
-      for _, inner in ipairs(mapping.inner_changes) do
-        if not is_empty_range(inner.original) then
-          apply_char_highlight(left_bufnr, inner.original, "CodeDiffCharDelete", original_lines)
-        end
-
-        if not is_empty_range(inner.modified) then
-          apply_char_highlight(right_bufnr, inner.modified, "CodeDiffCharInsert", modified_lines)
-        end
-      end
-    end
+    highlight_mapping(left_bufnr, mapping, "original", original_lines)
+    highlight_mapping(right_bufnr, mapping, "modified", modified_lines)
 
     local fillers, new_last_orig, new_last_mod = calculate_fillers(mapping, original_lines, modified_lines, last_orig_line, last_mod_line)
 
@@ -362,9 +244,7 @@ function M.render_diff(left_bufnr, right_bufnr, original_lines, modified_lines, 
   }
 end
 
--- ============================================================================
 -- Whole File Rendering
--- ============================================================================
 
 --- Render a one-sided file with highlighting across all logical lines.
 ---@param bufnr number
@@ -398,9 +278,7 @@ function M.render_whole_file(bufnr, side)
   })
 end
 
--- ============================================================================
 -- Single Buffer Rendering (for merge view)
--- ============================================================================
 
 -- Render diff highlights for a single buffer
 -- Used in merge view where each buffer shows diff against base independently
@@ -418,47 +296,12 @@ function M.render_single_buffer(bufnr, diff, side)
   -- Get buffer lines for character highlight calculations
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-  -- Determine highlight groups based on side
-  local line_hl, char_hl
-  if side == "original" then
-    line_hl = "CodeDiffLineDelete"
-    char_hl = "CodeDiffCharDelete"
-  else
-    line_hl = "CodeDiffLineInsert"
-    char_hl = "CodeDiffCharInsert"
-  end
-
   for _, mapping in ipairs(diff.changes) do
-    -- Get the range for our side
-    local range = mapping[side]
-    if not range then
-      goto continue
-    end
-
-    local is_empty = (range.end_line <= range.start_line)
-
-    -- Apply line highlights
-    if not is_empty then
-      apply_line_highlights(bufnr, range, line_hl)
-    end
-
-    -- Apply character highlights from inner changes
-    if mapping.inner_changes then
-      for _, inner in ipairs(mapping.inner_changes) do
-        local inner_range = inner[side]
-        if inner_range and not is_empty_range(inner_range) then
-          apply_char_highlight(bufnr, inner_range, char_hl, lines)
-        end
-      end
-    end
-
-    ::continue::
+    highlight_mapping(bufnr, mapping, side, lines)
   end
 end
 
--- ============================================================================
 -- Merge View Rendering (3-way merge with alignment)
--- ============================================================================
 
 -- Render merge view with proper alignment between left and right buffers
 -- Both buffers show diff against base, with filler lines to align corresponding changes
@@ -493,33 +336,10 @@ function M.render_merge_view(left_bufnr, right_bufnr, base_to_left_diff, base_to
   -- Render highlights ONLY for conflict regions (where both left and right modified the same base region)
   -- This matches VSCode's behavior of only highlighting conflicting changes
   for _, change in ipairs(conflict_left_changes) do
-    local range = change.modified
-    if range and range.end_line > range.start_line then
-      apply_line_highlights(left_bufnr, range, "CodeDiffLineInsert")
-    end
-    if change.inner_changes then
-      for _, inner in ipairs(change.inner_changes) do
-        local inner_range = inner.modified
-        if inner_range and not is_empty_range(inner_range) then
-          apply_char_highlight(left_bufnr, inner_range, "CodeDiffCharInsert", left_lines)
-        end
-      end
-    end
+    highlight_mapping(left_bufnr, change, "modified", left_lines)
   end
-
   for _, change in ipairs(conflict_right_changes) do
-    local range = change.modified
-    if range and range.end_line > range.start_line then
-      apply_line_highlights(right_bufnr, range, "CodeDiffLineInsert")
-    end
-    if change.inner_changes then
-      for _, inner in ipairs(change.inner_changes) do
-        local inner_range = inner.modified
-        if inner_range and not is_empty_range(inner_range) then
-          apply_char_highlight(right_bufnr, inner_range, "CodeDiffCharInsert", right_lines)
-        end
-      end
-    end
+    highlight_mapping(right_bufnr, change, "modified", right_lines)
   end
 
   -- Extract fillers from alignments

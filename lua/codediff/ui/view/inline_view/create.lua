@@ -88,21 +88,7 @@ end
 --- @param win number
 --- @param info table From prepare_buffer; info.bufnr is updated in place
 --- @param is_virtual boolean
-local function load_visible_side(win, info, is_virtual)
-  if is_virtual then
-    if info.needs_edit then
-      vim.cmd("edit! " .. vim.fn.fnameescape(info.target))
-      info.bufnr = vim.api.nvim_get_current_buf()
-    else
-      vim.api.nvim_win_set_buf(win, info.bufnr)
-    end
-  elseif info.needs_edit then
-    info.bufnr = open_real_file(win, info.target)
-  else
-    show_real_file_buffer(win, info.bufnr)
-  end
-  welcome_window.sync(win)
-end
+local load_visible_side = helpers.load_visible_side
 
 --- Materialise the original side, which inline never puts in a window.
 --- A codediff:// buffer carries bufhidden=wipe, so with no window showing it
@@ -219,6 +205,7 @@ function M.create(session_config, filetype, on_ready)
   local modified_info = prepare_buffer(modified_is_virtual, session_config.git_root, session_config.modified_revision, session_config.modified)
 
   load_visible_side(modified_win, modified_info, modified_is_virtual)
+  welcome_window.sync(modified_win)
   load_hidden_original(original_info, original_is_virtual)
 
   drop_initial_buf(modified_info.bufnr, original_info.bufnr)

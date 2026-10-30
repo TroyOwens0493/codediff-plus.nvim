@@ -56,20 +56,7 @@ end
 --- @param win number
 --- @param info table From prepare_buffer
 --- @param is_virtual boolean
-local function load_side(win, info, is_virtual)
-  if is_virtual then
-    if info.needs_edit then
-      vim.cmd("edit! " .. vim.fn.fnameescape(info.target))
-      info.bufnr = vim.api.nvim_get_current_buf()
-    else
-      vim.api.nvim_win_set_buf(win, info.bufnr)
-    end
-  elseif info.needs_edit then
-    info.bufnr = open_real_file(win, info.target)
-  else
-    show_real_file_buffer(win, info.bufnr)
-  end
-end
+local load_side = helpers.load_visible_side
 
 --- Open the two panes with the diff's actual content loaded.
 --- @param session_config SessionConfig
@@ -270,33 +257,7 @@ local function render_when_loaded(tabpage, original_info, modified_info, origina
   if modified_is_virtual then
     awaited[#awaited + 1] = "modified"
   end
-  if #awaited == 0 then
-    vim.schedule(render)
-    return
-  end
-
-  local group = vim.api.nvim_create_augroup("CodeDiffVirtualFileHighlight_" .. tabpage, { clear = true })
-  local ready = readiness.when_all(awaited, function()
-    vim.schedule(render)
-    vim.api.nvim_del_augroup_by_id(group)
-  end)
-
-  vim.api.nvim_create_autocmd("User", {
-    group = group,
-    pattern = "CodeDiffVirtualFileLoaded",
-    callback = function(event)
-      local buf = event.data and event.data.buf
-      if not buf then
-        return
-      end
-      if original_is_virtual and buf == original_info.bufnr then
-        ready.done("original")
-      end
-      if modified_is_virtual and buf == modified_info.bufnr then
-        ready.done("modified")
-      end
-    end,
-  })
+  readiness.when_virtual_loaded("CodeDiffVirtualFileHighlight_" .. tabpage, { original = original_info, modified = modified_info }, awaited, render, true)
 end
 
 ---@param session_config SessionConfig

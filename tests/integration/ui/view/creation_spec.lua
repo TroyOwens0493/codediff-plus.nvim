@@ -602,3 +602,49 @@ describe("Render View", function()
     assert.is_nil(messages:find("E211", 1, true), "Loading a deleted file that is already open should not report E211, got: " .. messages)
   end)
 end)
+
+describe("virtual file readiness", function()
+  local readiness = require("codediff.ui.view.readiness")
+  local group = "CodeDiffReadinessRegression"
+
+  after_each(function()
+    pcall(vim.api.nvim_del_augroup_by_name, group)
+  end)
+
+  it("uses the final buffer handles and renders only once", function()
+    local infos = { original = { bufnr = 1001 }, modified = { bufnr = 1002 } }
+    local runs = 0
+    readiness.when_virtual_loaded(group, infos, { "modified" }, function()
+      runs = runs + 1
+    end)
+    local function loaded(buf)
+      vim.api.nvim_exec_autocmds("User", { pattern = "CodeDiffVirtualFileLoaded", data = { buf = buf } })
+    end
+    infos.modified.bufnr = 1003
+    loaded(1001)
+    loaded(1002)
+    vim.wait(10)
+    assert.equals(0, runs)
+    loaded(1003)
+    loaded(1003)
+    assert.is_true(vim.wait(1000, function()
+      return runs == 1
+    end, 10))
+    assert.equals(0, vim.fn.exists("#" .. group))
+  end)
+
+  it("distinguishes a ready creation from an update that renders after loading", function()
+    local runs = 0
+    local render = function()
+      runs = runs + 1
+    end
+    readiness.when_virtual_loaded(group, {}, {}, render, false)
+    vim.wait(10)
+    assert.equals(0, runs)
+    readiness.when_virtual_loaded(group, {}, {}, render, true)
+    assert.equals(0, runs)
+    assert.is_true(vim.wait(1000, function()
+      return runs == 1
+    end, 10))
+  end)
+end)
