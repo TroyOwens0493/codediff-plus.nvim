@@ -6,6 +6,9 @@ CodeDiff is a live code review workspace for Neovim with VSCode style diffs, bui
 
 CodeDiff stays synchronized with a changing repository, so review can continue as the code evolves. From the same workspace, you can stage or discard changes, review branches and pull requests, browse history, and resolve merge conflicts.
 
+> [!NOTE]
+> This project began as a fork of [esmuellert/codediff.nvim](https://github.com/esmuellert/codediff.nvim) and is now developed independently. Thanks to esmuellert and the original contributors for their work.
+
 <div align="center">
 
 https://github.com/user-attachments/assets/3c66a26d-5ff9-4dac-8035-a2f2b7bd2308
