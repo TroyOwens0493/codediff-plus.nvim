@@ -236,16 +236,19 @@ describe("keymap lifecycle", function()
       commands.vscode_diff({ fargs = {} })
 
       local tabpage
-      assert.is_true(vim.wait(15000, function()
-        for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
-          local session = lifecycle.get_session(tp)
-          if session and (session.panel or {}).view and (session.panel or {}).view.bufnr then
-            tabpage = tp
-            return true
+      assert.is_true(
+        vim.wait(15000, function()
+          for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
+            local session = lifecycle.get_session(tp)
+            if session and (session.panel or {}).view and (session.panel or {}).view.bufnr then
+              tabpage = tp
+              return true
+            end
           end
-        end
-        return false
-      end, 50), "explorer session should be created")
+          return false
+        end, 50),
+        "explorer session should be created"
+      )
 
       local explorer = (lifecycle.get_session(tabpage).panel or {}).view
       explorer.on_file_select({ path = "one.txt", group = "unstaged", status = "M", git_root = repo.dir })
@@ -254,14 +257,39 @@ describe("keymap lifecycle", function()
       assert.is_not_nil(matrix.map_index(first_buf, "n")["q"], "first file should be mapped while displayed")
 
       explorer.on_file_select({ path = "two.txt", group = "unstaged", status = "M", git_root = repo.dir })
-      assert.is_true(vim.wait(10000, function()
-        local session = lifecycle.get_session(tabpage)
-        return session and session.modified_bufnr ~= first_buf and session.stored_diff_result ~= nil
-      end, 50), "second file diff should be ready")
+      assert.is_true(
+        vim.wait(10000, function()
+          local session = lifecycle.get_session(tabpage)
+          return session and session.modified_bufnr ~= first_buf and session.stored_diff_result ~= nil
+        end, 50),
+        "second file diff should be ready"
+      )
 
       assert.is_nil(matrix.map_index(first_buf, "n")["q"], "the previous file's buffer must be detached on file switch")
 
       repo.cleanup()
+    end)
+
+    it("reapplies inline hunk actions to the current original after a file switch", function()
+      reset_config({ diff = { layout = "inline" } })
+      local tabpage, _, cleanup = open_standalone({ "first original" }, { "first changed" })
+      local first = lifecycle.get_session(tabpage).original_bufnr
+      local left = temp_file("_inline_next_left.txt", { "second original" })
+      local right = temp_file("_inline_next_right.txt", { "second changed" })
+      view.update(tabpage, { original = path.make_ref(left), modified = path.make_ref(right) })
+      assert.is_true(wait_for_diff(tabpage))
+      local session = lifecycle.get_session(tabpage)
+      assert.is_true(first ~= session.original_bufnr)
+      session.reapply_keymaps()
+      vim.api.nvim_set_current_win(session.modified_win)
+      vim.api.nvim_win_set_cursor(session.modified_win, { 1, 0 })
+      local mapping = vim.fn.maparg("do", "n", false, true)
+      assert.equals("function", type(mapping.callback))
+      mapping.callback()
+      assert.same({ "second original" }, vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false))
+      cleanup()
+      vim.fn.delete(left)
+      vim.fn.delete(right)
     end)
 
     it("releases compact fold wraps when leaving the tab", function()
@@ -295,10 +323,13 @@ describe("keymap lifecycle", function()
       assert.is_not_nil(matrix.map_index(session.modified_bufnr, "n")["gm"], "gm should be bound in side-by-side")
 
       view.toggle_layout(tabpage)
-      assert.is_true(vim.wait(10000, function()
-        local s = lifecycle.get_session(tabpage)
-        return s and s.layout == "inline" and s.stored_diff_result ~= nil
-      end, 50), "layout should toggle to inline")
+      assert.is_true(
+        vim.wait(10000, function()
+          local s = lifecycle.get_session(tabpage)
+          return s and s.layout == "inline" and s.stored_diff_result ~= nil
+        end, 50),
+        "layout should toggle to inline"
+      )
 
       session = lifecycle.get_session(tabpage)
       assert.is_nil(matrix.map_index(session.modified_bufnr, "n")["gm"], "gm applies only to side-by-side and must be retired")
@@ -342,19 +373,26 @@ describe("keymap lifecycle", function()
       vim.keymap.set("n", "do", "<Cmd>echo 'user-do'<CR>", { buffer = conflict_buf, desc = "user-do" })
 
       local ready = false
-      view.create({
-        git_root = repo.dir,
-        original = path.make_ref("conf.txt", repo.dir),
-        modified = path.make_ref("conf.txt", repo.dir),
-        original_revision = ":3",
-        modified_revision = ":2",
-        conflict = true,
-      }, "", function()
-        ready = true
-      end)
-      assert.is_true(vim.wait(15000, function()
-        return ready
-      end, 50), "conflict view should become ready")
+      view.create(
+        {
+          git_root = repo.dir,
+          original = path.make_ref("conf.txt", repo.dir),
+          modified = path.make_ref("conf.txt", repo.dir),
+          original_revision = ":3",
+          modified_revision = ":2",
+          conflict = true,
+        },
+        "",
+        function()
+          ready = true
+        end
+      )
+      assert.is_true(
+        vim.wait(15000, function()
+          return ready
+        end, 50),
+        "conflict view should become ready"
+      )
 
       assert.equals("user-do", matrix.map_index(conflict_buf, "n")["do"], "conflict mode must not destroy the user's own do mapping")
 

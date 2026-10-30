@@ -128,4 +128,16 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
   compact.refresh(tabpage)
 end
 
+-- Resolve buffers at call time: file switches must not retain the old original.
+function M.reapply(tabpage)
+  local session = lifecycle.get_session(tabpage)
+  if not session or not session.original_bufnr or not session.modified_bufnr then
+    return
+  end
+  M.setup_all_keymaps(tabpage, session.original_bufnr, session.modified_bufnr, lifecycle.get_panel_name(tabpage) == "explorer")
+  if session.merge then
+    require("codediff.ui.conflict").setup_keymaps(tabpage)
+  end
+end
+
 return M

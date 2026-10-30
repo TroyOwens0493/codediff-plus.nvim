@@ -2,8 +2,7 @@
 local M = {}
 
 local lifecycle = require("codediff.ui.lifecycle")
-local core = require("codediff.ui.core")
-local path = require("codediff.core.path")
+local single = require("codediff.ui.view.single_file")
 local layout = require("codediff.ui.layout")
 local helpers = require("codediff.ui.view.helpers")
 local welcome_window = require("codediff.ui.view.welcome_window")
@@ -110,24 +109,7 @@ local function show_single_file(tabpage, opts)
       session.modified_win = keep_win
     end
 
-    -- Create a scratch buffer as placeholder for the empty side
-    local empty_buf = vim.api.nvim_create_buf(false, true)
-    vim.bo[empty_buf].buftype = "nofile"
-
-    local orig_bufnr = opts.keep == "original" and opts.load_bufnr or empty_buf
-    local mod_bufnr = opts.keep == "modified" and opts.load_bufnr or empty_buf
-
-    lifecycle.update_buffers(tabpage, orig_bufnr, mod_bufnr)
-    lifecycle.update_paths(tabpage, path.make_ref(opts.original_path or "", session.git_root), path.make_ref(opts.modified_path or "", session.git_root))
-    lifecycle.update_revisions(tabpage, opts.original_revision, opts.modified_revision)
-    lifecycle.update_diff_result(tabpage, { changes = {}, moves = {} })
-    session.single_side = opts.highlight ~= false and opts.keep or nil
-    if session.single_side then
-      core.render_whole_file(opts.load_bufnr, session.single_side)
-    end
-
-    local view_keymaps = require("codediff.ui.view.keymaps")
-    view_keymaps.setup_all_keymaps(tabpage, orig_bufnr, mod_bufnr, session.panel ~= nil and session.panel.name == "explorer")
+    single.publish(tabpage, opts)
   end
 
   layout.arrange(tabpage)
@@ -147,19 +129,10 @@ local function load_real_file(file_path)
   return bufnr
 end
 
--- Load a virtual file from git revision, return bufnr
-local function load_virtual_file(git_root, revision, file_path)
-  local virtual_file_mod = require("codediff.core.virtual_file")
-  local url = virtual_file_mod.create_url(git_root, revision, file_path)
-  local bufnr = vim.fn.bufadd(url)
-  vim.fn.bufload(bufnr)
-  return bufnr
-end
-
 -- Virtual buffers use the repository-relative path for loading. The session
 -- can retain a different path spelling, as it does for working-tree deletions.
 local function show_virtual(tabpage, git_root, file_path, revision, side, session_path)
-  local opts = { keep = side, load_bufnr = load_virtual_file(git_root, revision, file_path) }
+  local opts = { keep = side, load_bufnr = single.load_virtual(git_root, revision, file_path) }
   opts[side .. "_path"] = session_path or file_path
   opts[side .. "_revision"] = revision
   show_single_file(tabpage, opts)
