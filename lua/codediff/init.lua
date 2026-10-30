@@ -64,36 +64,6 @@ function M.review_close()
   return require("codediff.review").close()
 end
 
--- Toggle what changed for the block under the cursor (existing API).
-function M.toggle_summary()
-  return M.toggle_what_summary()
-end
-
--- Toggle a floating description of what changed in the current block.
-function M.toggle_what_summary()
-  return require("codediff.ai").toggle_summary("what")
-end
-
--- Toggle a floating explanation of the current block's broader purpose.
-function M.toggle_why_summary()
-  return require("codediff.ai").toggle_summary("why")
-end
-
--- Explain the active Visual selection, or an explicit inclusive source range.
-function M.explain_selection(first, last)
-  return require("codediff.ai").explain(first, last)
-end
-
--- Generate both summaries for each change in the current file. opts.force bypasses the cache.
-function M.summarize(opts)
-  return require("codediff.ai").summarize(nil, opts and opts.force)
-end
-
--- Read summary state for a statusline or another integration.
-function M.ai_status(tabpage)
-  return require("codediff.ai").status(tabpage)
-end
-
 function M.ai_login()
   return require("codediff.ai").login()
 end

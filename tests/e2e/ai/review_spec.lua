@@ -11,10 +11,6 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       screen = h.screen("polling", layout, {
         ai = {
           enabled = true,
-          auto_summary = false,
-          keymap = false,
-          why_keymap = false,
-          explain_keymap = false,
           command = { "python3", support.project_root .. "/tests/fixtures/ai/fake_codex.py", "ok" },
         },
       })
@@ -80,6 +76,29 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       )
     end
 
+    local function focus_code(side, text)
+      screen:exec(
+        [[
+        local side, text = ...
+        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          local buf = vim.api.nvim_win_get_buf(win)
+          if vim.api.nvim_buf_get_name(buf):match('/' .. side .. '$') then
+            vim.api.nvim_set_current_win(win)
+            for row, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+              if line == text then
+                vim.api.nvim_win_set_cursor(win, { row, 0 })
+                return
+              end
+            end
+          end
+        end
+        error('Missing guided source: ' .. text)
+      ]],
+        { side, text }
+      )
+      screen:flush()
+    end
+
     it("opens a named review tab with a stop sidebar, top summary, and scoped CodeDiff panes", function()
       local source = h.panes(screen)
       local count = screen:exec("return #vim.api.nvim_list_tabpages()")
@@ -127,11 +146,15 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
           and vim.api.nvim_win_get_height(summary) <= 7
       ]]))
       assert.same(
-        {},
+        { ["]c"] = "Next hunk", ["[c"] = "Previous hunk", [" v"] = "Mark review stop as reviewed" },
         screen:exec([[
         for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
           local buf = vim.api.nvim_win_get_buf(win)
-          if vim.bo[buf].filetype == 'codediff-review-stops' then return vim.api.nvim_buf_get_keymap(buf, 'n') end
+          if vim.bo[buf].filetype == 'codediff-review-stops' then
+            local maps = {}
+            for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, 'n')) do maps[map.lhs] = map.desc end
+            return maps
+          end
         end
       ]])
       )
@@ -148,6 +171,218 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       end, "previous step did not restore a.txt")
       assert.equals(1, status().position)
       assert.is_false(screen:exec("return require('codediff').review_prev()"))
+      h.assert_no_errors(screen)
+    end)
+
+    it("marks the current stop as reviewed from every pane with leader v", function()
+      start()
+      local wins = screen:exec("return vim.api.nvim_tabpage_list_wins(0)")
+      for _, win in ipairs(wins) do
+        screen:exec(
+          [[
+          vim.api.nvim_set_current_win(...)
+          require('codediff').review_mark_seen(false)
+        ]],
+          { win }
+        )
+        h.feed(screen, "<Space>v")
+        assert.is_true(status().seen[1])
+        assert.is_nil(status().seen[2])
+        assert.equals(1, status().position)
+        assert.equals(win, screen:exec("return vim.api.nvim_get_current_win()"))
+        assert.is_true(screen:exec([[
+          for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            local buf = vim.api.nvim_win_get_buf(win)
+            if vim.bo[buf].filetype == 'codediff-review-stops' then
+              return vim.api.nvim_buf_get_lines(buf, 3, 4, false)[1]:find('[x]', 1, true) ~= nil
+            end
+          end
+          return false
+        ]]))
+        h.feed(screen, "<Space>v")
+        assert.is_true(status().seen[1])
+      end
+      screen:command("CodeDiffReview next")
+      h.feed(screen, "<Space>v")
+      assert.is_true(status().seen[2])
+      h.assert_no_errors(screen)
+    end)
+
+    it("navigates changed blocks from every review pane and respects hunk cycling", function()
+      screen:exec("require('codediff.config').options.ai.command[3] = 'grouped_guide'")
+      start()
+      local function current_line()
+        return screen:exec("return vim.api.nvim_get_current_line()")
+      end
+      -- Generation leaves focus in the stop list; navigation enters the code pane.
+      h.feed(screen, "]c")
+      assert.equals("working-A", current_line())
+      h.feed(screen, "]c")
+      assert.equals("working-B", current_line())
+      h.feed(screen, "[c")
+      assert.equals("working-A", current_line())
+      h.feed(screen, "[c")
+      assert.equals("working-B", current_line())
+      h.feed(screen, "]c")
+      assert.equals("working-A", current_line())
+      screen:exec([[
+        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'codediff-review' then
+            vim.api.nvim_set_current_win(win)
+            return
+          end
+        end
+      ]])
+      h.feed(screen, "]c")
+      assert.equals("working-B", current_line())
+      screen:exec("require('codediff.config').options.diff.cycle_next_hunk = false")
+      h.feed(screen, "]c")
+      assert.equals("working-B", current_line())
+      assert.is_false(screen:exec("return require('codediff').next_hunk()"))
+      assert.is_true(screen:exec("return require('codediff').prev_hunk()"))
+      assert.equals("working-A", current_line())
+      h.feed(screen, "[c")
+      assert.equals("working-A", current_line())
+      if layout == "side-by-side" then
+        focus_code("original", "base-A")
+        h.feed(screen, "]c")
+        assert.equals("base-B", current_line())
+        h.feed(screen, "[c")
+        assert.equals("base-A", current_line())
+      end
+      assert.equals(1, status().position)
+      screen:command("CodeDiffReview close")
+      h.focus(screen, "modified", 1)
+      assert.is_true(screen:exec("return require('codediff').next_hunk()"))
+      h.assert_no_errors(screen)
+    end)
+
+    it("navigates separate changes in the same file without changing review stops", function()
+      repo.replace("hunks.txt", 1, "working-one")
+      repo.replace("hunks.txt", 12, "working-two")
+      screen:exec("require('codediff.config').options.ai.command[3] = 'grouped_guide'")
+      start()
+      focus_code("modified", "working-one")
+      h.feed(screen, "]c")
+      assert.equals("working-two", screen:exec("return vim.api.nvim_get_current_line()"))
+      h.feed(screen, "[c")
+      assert.equals("working-one", screen:exec("return vim.api.nvim_get_current_line()"))
+      assert.equals(1, status().position)
+      h.assert_no_errors(screen)
+    end)
+
+    it("uses configured hunk keys and keeps disabled mappings out of review buffers", function()
+      screen:exec([[
+        local config = require('codediff.config').options
+        config.ai.command[3] = 'grouped_guide'
+        config.keymaps.view.next_hunk = { ']h', ']j' }
+        config.keymaps.view.prev_hunk = false
+      ]])
+      start()
+      assert.same(
+        { ["]h"] = true, ["]j"] = true, [" v"] = true },
+        screen:exec([[
+        local maps = {}
+        for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'n')) do maps[map.lhs] = true end
+        return maps
+      ]])
+      )
+      h.feed(screen, "]h")
+      assert.equals("working-A", screen:exec("return vim.api.nvim_get_current_line()"))
+      h.feed(screen, "]j")
+      assert.equals("working-B", screen:exec("return vim.api.nvim_get_current_line()"))
+      screen:command("CodeDiffReview close")
+      screen:command("CodeDiffReview start")
+      await_status("ready")
+      h.feed(screen, "]h")
+      assert.equals("working-A", screen:exec("return vim.api.nvim_get_current_line()"))
+      h.assert_no_errors(screen)
+    end)
+
+    it("navigates added and deleted blocks and does not navigate a stale guide", function()
+      repo.command({ "rm", "-f", "a.txt" })
+      repo.write_file("new.txt", { "new file content" })
+      screen:exec("require('codediff.config').options.ai.command[3] = 'grouped_guide'")
+      start()
+      -- Unstaged files come before the staged deletion.
+      for _, expected in ipairs({ "working-B", "new file content", "", "working-B" }) do
+        h.feed(screen, "]c")
+        assert.equals(expected, screen:exec("return vim.api.nvim_get_current_line()"))
+      end
+      if layout == "side-by-side" then
+        focus_code("original", "base-A")
+        h.feed(screen, "]c")
+        assert.equals("base-B", screen:exec("return vim.api.nvim_get_current_line()"))
+        h.feed(screen, "]c")
+        assert.equals("", screen:exec("return vim.api.nvim_get_current_line()"))
+        h.feed(screen, "[c")
+        assert.equals("base-B", screen:exec("return vim.api.nvim_get_current_line()"))
+      end
+      repo.replace("b.txt", 2, "newer-B")
+      await_status("stale")
+      local cursor = screen:exec("return vim.api.nvim_win_get_cursor(0)")
+      h.feed(screen, "]c")
+      h.feed(screen, "[c")
+      assert.same(cursor, screen:exec("return vim.api.nvim_win_get_cursor(0)"))
+      assert.is_false(screen:exec("return require('codediff').next_hunk()"))
+      h.assert_no_errors(screen)
+    end)
+
+    it("preserves relative numbers and updates the source gutter as the cursor moves", function()
+      screen:exec([[
+        local session = refresh_session()
+        vim.wo[session.modified_win].relativenumber = true
+        if session.layout == 'side-by-side' then
+          vim.wo[session.original_win].relativenumber = false
+        end
+        vim.api.nvim_set_current_win(session.panel.view.winid)
+      ]])
+      start()
+      focus_code("modified", "working-A")
+      assert.is_true(screen:exec("return vim.wo.relativenumber"))
+      local function expect_number(side, text, expected)
+        screen:flush()
+        local position = screen:exec(
+          [[
+          local side, text = ...
+          for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            local buf = vim.api.nvim_win_get_buf(win)
+            if vim.api.nvim_buf_get_name(buf):match('/' .. side .. '$') then
+              for row, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+                if line == text then return vim.fn.screenpos(win, row, 1) end
+              end
+            end
+          end
+          error('Missing numbered source: ' .. text)
+        ]],
+          { side, text }
+        )
+        assert.equals(string.format("%5s ", expected), screen:text(position.row, position.col - 6, 6))
+      end
+      expect_number("modified", "working-A", 2)
+      expect_number("modified", "context", 1)
+      expect_number("modified", "end", 2)
+      h.feed(screen, "j")
+      expect_number("modified", "working-A", 1)
+      expect_number("modified", "context", 3)
+      if layout == "side-by-side" then
+        expect_number("original", "context", 3)
+        focus_code("original", "base-A")
+        assert.is_false(screen:exec("return vim.wo.relativenumber"))
+        screen:command("setlocal relativenumber")
+        expect_number("original", "context", 1)
+        expect_number("modified", "context", 3)
+        focus_code("modified", "context")
+      end
+      screen:command("setlocal norelativenumber")
+      expect_number("modified", "working-A", 2)
+      expect_number("modified", "end", 4)
+      screen:command("setlocal relativenumber nonumber")
+      expect_number("modified", "context", 0)
+      screen:command("CodeDiffReview next")
+      focus_code("modified", "working-B")
+      expect_number("modified", "working-B", 0)
+      expect_number("modified", "end", 1)
       h.assert_no_errors(screen)
     end)
 
@@ -314,7 +549,6 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       screen = h.screen("polling", layout, {
         ai = {
           enabled = true,
-          auto_summary = false,
           command = { "python3", support.project_root .. "/tests/fixtures/ai/fake_codex.py", "failed" },
         },
       })
@@ -324,6 +558,34 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       await_status("ready")
       assert.equals(2, status().position)
       assert.is_truthy(status().seen[2])
+      h.assert_no_errors(screen)
+    end)
+
+    it("excludes generated files after generation and after restoring a saved guide", function()
+      repo.write_file("package-lock.json", { '{"lockfileVersion": 3}' })
+      screen:exec("require('codediff.config').options.ai.command[3] = 'generated_guide'")
+      h.expect_panel(screen, "package-lock.json", true)
+      start()
+      local function assert_source_steps()
+        local steps = screen:exec("return require('codediff').review_steps()")
+        assert.equals(2, #steps)
+        assert.is_nil(vim.inspect(steps):find("package-lock.json", 1, true))
+        assert.equals("Review a.txt", steps[1].title)
+        assert.equals("Review b.txt", steps[2].title)
+      end
+      assert_source_steps()
+      screen:close()
+      screen = h.screen("polling", layout, {
+        ai = {
+          enabled = true,
+          command = { "python3", support.project_root .. "/tests/fixtures/ai/fake_codex.py", "failed" },
+        },
+      })
+      screen:exec("vim.env.XDG_CACHE_HOME = ...", { cache_dir })
+      h.open(screen, repo, "CodeDiff", "a.txt")
+      screen:command("CodeDiffReview start")
+      await_status("ready")
+      assert_source_steps()
       h.assert_no_errors(screen)
     end)
 

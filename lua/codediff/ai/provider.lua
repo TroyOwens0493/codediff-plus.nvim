@@ -1,6 +1,5 @@
 local M = {}
 local Client = require("codediff.ai.client")
-local context = require("codediff.ai.context")
 local client
 
 local function connect(opts, callback)
@@ -76,7 +75,7 @@ local function request(snapshot, opts, format, callback)
       connection:request("thread/unsubscribe", { threadId = thread_id }, function() end)
     end
   end
-  local function finish(err, result)
+  local function finish(err, result, generated_files)
     if finished then
       return
     end
@@ -90,7 +89,7 @@ local function request(snapshot, opts, format, callback)
     end
     release()
     if not cancelled then
-      callback(err, result)
+      callback(err, result, generated_files)
     end
   end
   local function interrupt()
@@ -203,8 +202,8 @@ local function request(snapshot, opts, format, callback)
                 if params.turn.status ~= "completed" then
                   finish(params.turn.error and params.turn.error.message or "The AI request was interrupted.")
                 else
-                  local summaries, decode_err = format.decode(text, snapshot)
-                  finish(decode_err, summaries)
+                  local summaries, decode_err, generated_files = format.decode(text, snapshot)
+                  finish(decode_err, summaries, generated_files)
                 end
               end
             end
@@ -234,14 +233,6 @@ local function request(snapshot, opts, format, callback)
     interrupt()
     finish()
   end
-end
-
-function M.summarize(snapshot, opts, callback)
-  return request(snapshot, opts, context, callback)
-end
-
-function M.explain(snapshot, opts, callback)
-  return request(snapshot, opts, require("codediff.ai.selection"), callback)
 end
 
 function M.review(snapshot, opts, callback)

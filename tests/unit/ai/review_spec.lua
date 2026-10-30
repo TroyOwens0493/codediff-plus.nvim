@@ -57,6 +57,37 @@ describe("Guided review validation", function()
     end
   end)
 
+  it("keeps generated files out of the omitted-file fallback while retaining source files", function()
+    snapshot.files[2].file = "package-lock.json"
+    snapshot.files[3] = { file = "source.lua", changes = {} }
+    guide.generated_files = { 2 }
+    local steps, err, generated_files = format.decode(vim.json.encode(guide), snapshot)
+    assert.is_nil(err)
+    assert.same({ 2 }, generated_files)
+    assert.equals(2, #steps)
+    assert.same({ 3 }, steps[2].files)
+  end)
+
+  it("rejects invalid generated file ids and generated files included in review steps", function()
+    for _, ids in ipairs({ { 999 }, { 0 }, { "2" }, false, { 1 } }) do
+      guide.generated_files = ids
+      assert.is_nil(format.decode(vim.json.encode(guide), snapshot))
+    end
+    guide.generated_files = { 2 }
+    guide.steps[1].files = { 2 }
+    assert.is_nil(format.decode(vim.json.encode(guide), snapshot))
+  end)
+
+  it("accepts a context-only guide when all changes are generated", function()
+    guide.generated_files = { 1, 2 }
+    guide.steps[1].excerpts, guide.steps[1].notes = {}, {}
+    guide.steps[1].summary = "There are no source changes to review."
+    local steps = assert(format.decode(vim.json.encode(guide), snapshot))
+    assert.equals(1, #steps)
+    assert.same({}, steps[1].files)
+    assert.same({}, steps[1].excerpts)
+  end)
+
   it("rejects notes outside their excerpt, empty sides, and oversized excerpts", function()
     guide.steps[1].notes[1].line = 2
     assert.is_nil(format.decode(vim.json.encode(guide), snapshot))

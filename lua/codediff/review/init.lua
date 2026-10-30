@@ -240,6 +240,7 @@ function M.start(opts)
   states[tabpage] = state
   state.session, state.status, state.error = session, "loading", nil
   state.steps, state.snapshot, state.answers = nil, nil, {}
+  state.generated_files = {}
   state.position, state.seen = 1, {}
   panel.open(state)
   poll(state)
@@ -264,11 +265,12 @@ function M.start(opts)
     local cached = not opts.force and store.read(snapshot)
     if cached then
       state.steps, state.position, state.seen = cached.steps, cached.position, cached.seen
+      state.generated_files = cached.generated_files
       state.status = "ready"
       panel.render(state)
       return
     end
-    state.cancel_request = provider.review(snapshot, options(), function(failure, steps)
+    state.cancel_request = provider.review(snapshot, options(), function(failure, steps, generated_files)
       if not is_live(state, generation) then
         return
       end
@@ -281,6 +283,7 @@ function M.start(opts)
       -- Re-read the whole comparison: another file may have changed during inference.
       check(state, function()
         state.status, state.steps = "ready", steps
+        state.generated_files = generated_files
         save(state)
         panel.render(state)
       end, true)
@@ -391,6 +394,14 @@ function M.select(index)
     return M.open_file(1)
   end
   return true
+end
+
+function M.navigate_hunk(direction)
+  local state = state_for()
+  if not state or vim.api.nvim_get_current_tabpage() ~= state.review_tabpage then
+    return false
+  end
+  return panel.navigate_hunk(state, direction)
 end
 
 function M.step(direction)

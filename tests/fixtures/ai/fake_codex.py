@@ -25,24 +25,14 @@ def respond(request, result):
 
 
 def complete(thread_id, turn_id, payload):
-    summaries = [
-        {
-            "id": change["id"],
-            "what": "Change %s in %s. This explains its effect." % (change["id"], payload["file"]),
-            "why": "Purpose of change %s in %s. This explains the broader goal." % (change["id"], payload["file"]),
-        }
-        for change in payload.get("changes", [])
-    ]
-    output = {"summaries": summaries}
-    if "lines" in payload:
-        output = {"explanations": [
-            {"line": entry["line"], "explanation": "Explain %s in %s (%s): %s" % (
-                entry["line"], payload["file"], payload["side"], entry["text"])}
-            for entry in payload["lines"]
-        ]}
+    output = {}
     if payload.get("review_kind") == "guide":
         steps = []
+        generated_files = []
         for file in payload["files"]:
+            if scenario == "generated_guide" and file["file"] == "package-lock.json":
+                generated_files.append(file["id"])
+                continue
             excerpts = []
             if file["changes"]:
                 change = file["changes"][0]
@@ -58,7 +48,12 @@ def complete(thread_id, turn_id, payload):
                           "notes": ([{"excerpt": 1, "line": excerpts[0]["start_line"],
                                       "text": "This connects to the next component."}] if excerpts else []),
                           "questions": ["Why does this change?"]})
-        output = {"steps": steps}
+        output = {"steps": steps, "generated_files": generated_files}
+        if scenario == "grouped_guide":
+            output = {"generated_files": [], "steps": [{"title": "Related changes", "summary": "Review the changes together.",
+                                 "attention": "", "excerpts": [],
+                                 "files": [file["id"] for file in payload["files"]],
+                                 "notes": [], "questions": []}]}
         if scenario == "bad_guide":
             output["steps"][0]["excerpts"][0]["file_id"] = 999
     if "question" in payload:
@@ -114,10 +109,8 @@ for line in sys.stdin:
             assert params["outputSchema"]["required"] == ["answer"]
         elif payload.get("review_kind") == "guide":
             assert "steps" in params["outputSchema"]["properties"]
-        else:
-            kind = "explanations" if "lines" in payload else "summaries"
-            schema = params["outputSchema"]["properties"][kind]["items"]
-            assert schema["required"] == (["line", "explanation"] if kind == "explanations" else ["id", "what", "why"])
+            assert "generated_files" in params["outputSchema"]["required"]
+            assert "Exclude generated files" in params["input"][0]["text"]
         turn_id = "turn-" + str(turns)
         respond(request, {"turn": {"id": turn_id, "status": "inProgress"}})
         if scenario in ("streaming", "streamed_hang", "unrelated_stream"):

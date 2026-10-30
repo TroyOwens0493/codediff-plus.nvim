@@ -6,6 +6,7 @@ local config = require("codediff.config")
 local highlights = require("codediff.ui.highlights")
 local gutter_signs = require("codediff.ui.gutter_signs")
 local compat = require("codediff.core.compat")
+local char_highlights = require("codediff.ui.char_highlights")
 
 -- Dedicated namespace for inline diff (separate from side-by-side namespaces)
 M.ns_inline = vim.api.nvim_create_namespace("codediff-inline")
@@ -232,6 +233,15 @@ local function get_char_ranges_for_orig_line(inner_changes, orig_line_1based, or
     return nil
   end
 
+  if config.options.highlights.char_whole_line == false then
+    for _, inner in ipairs(inner_changes) do
+      char_highlights.each_partial_range(inner.original, original_lines, function(_, start_col, end_col)
+        table.insert(ranges, { start_col = start_col + 1, end_col = end_col })
+      end, orig_line_1based)
+    end
+    return #ranges > 0 and ranges or nil
+  end
+
   for _, inner in ipairs(inner_changes) do
     local orig = inner.original
     if not orig then
@@ -286,6 +296,19 @@ end
 
 local function apply_modified_char_highlights(bufnr, inner_changes, modified_lines)
   if not inner_changes then
+    return
+  end
+
+  if config.options.highlights.char_whole_line == false then
+    for _, inner in ipairs(inner_changes) do
+      char_highlights.each_partial_range(inner.modified, modified_lines, function(row, start_col, end_col)
+        pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_inline, row, start_col, {
+          end_col = end_col,
+          hl_group = "CodeDiffCharInsert",
+          priority = 200,
+        })
+      end)
+    end
     return
   end
 
@@ -391,9 +414,17 @@ function M.render_inline_diff(bufnr, diff_result, original_lines, modified_lines
     return
   end
 
+  -- Virtual deleted rows cannot carry native signs; mark them in their text below.
+  gutter_signs.set_changed_ranges(nil, bufnr, diff_result.changes)
+  local sign_options = config.options.diff.gutter_signs
+
   -- Compute syntax highlights for original lines (for virt_line coloring)
-  local filetype = opts and opts.filetype or (vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].filetype or nil)
-  local syntax_hls = opts and opts.syntax_highlights or M.compute_syntax_highlights(original_lines, filetype)
+  local show_deleted_lines = config.options.diff.show_deleted_lines
+  local syntax_hls = {}
+  if show_deleted_lines then
+    local filetype = opts and opts.filetype or (vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].filetype or nil)
+    syntax_hls = opts and opts.syntax_highlights or M.compute_syntax_highlights(original_lines, filetype)
+  end
 
   local buf_line_count = vim.api.nvim_buf_line_count(bufnr)
   local highlight_priority = config.options.diff.highlight_priority
@@ -410,7 +441,7 @@ function M.render_inline_diff(bufnr, diff_result, original_lines, modified_lines
     local has_modified = mod_count > 0
 
     -- Step 1: Show deleted/original lines as virtual lines
-    if has_original then
+    if has_original and show_deleted_lines then
       local virt_lines = {}
 
       for orig_line = orig_start, orig_end - 1 do
@@ -418,6 +449,9 @@ function M.render_inline_diff(bufnr, diff_result, original_lines, modified_lines
         local char_ranges = get_char_ranges_for_orig_line(mapping.inner_changes, orig_line, original_lines)
         local line_syntax = syntax_hls[orig_line]
         local chunks = build_highlighted_virt_line(line_text, char_ranges, line_syntax)
+        if type(sign_options) == "table" then
+          table.insert(chunks, 1, { (sign_options.delete_text or "－") .. " ", "CodeDiffGutterDelete" })
+        end
         table.insert(virt_lines, chunks)
       end
 

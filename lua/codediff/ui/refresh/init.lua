@@ -120,9 +120,6 @@ function Controller:publish(data, redraw)
   self.blocked = nil
   data.result = session.result_bufnr and inputs.lines(session.result_bufnr) or nil
   self.last = data
-  if package.loaded["codediff.ai"] then
-    require("codediff.ai").on_diff_updated(session.tabpage)
-  end
   vim.api.nvim_exec_autocmds("User", { pattern = "CodeDiffUpdated", modeline = false, data = { tabpage = session.tabpage } })
 end
 
@@ -373,9 +370,6 @@ function M.is_current(tabpage, session, generation)
 end
 
 function M.ready(tabpage)
-  if package.loaded["codediff.ai"] then
-    require("codediff.ai").on_diff_updated(tabpage)
-  end
   local session = session_for(tabpage)
   local self = session and session.refresh
   if not self or self.closed then

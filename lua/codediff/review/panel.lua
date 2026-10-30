@@ -6,9 +6,14 @@ function M.number()
   if vim.v.virtnum ~= 0 then
     return "      "
   end
-  local locations = vim.b.codediff_review_locations or {}
+  local win = tonumber(vim.g.statusline_winid) or vim.api.nvim_get_current_win()
+  local locations = vim.b[vim.api.nvim_win_get_buf(win)].codediff_review_locations or {}
   local location = locations[vim.v.lnum]
-  return string.format("%5s ", location and location.line or "")
+  local number = location and location.line or ""
+  if location and vim.wo[win].relativenumber and (vim.v.relnum ~= 0 or not vim.wo[win].number) then
+    number = vim.v.relnum
+  end
+  return string.format("%5s ", number)
 end
 
 function M.tabline()
@@ -57,10 +62,10 @@ end
 local function select_file(state, file_id)
   local file = file_id and state.snapshot.files[file_id]
   local path = file and file.file
-  if state.active_path == path then
+  if state.active_path == path and state.active_file_id == file_id and state.active_display == state.display then
     return
   end
-  state.active_path = path
+  state.active_path, state.active_file_id, state.active_display = path, file_id, state.display
   vim.api.nvim_exec_autocmds("User", {
     pattern = "CodeDiffReviewFileSelect",
     modeline = false,
@@ -86,7 +91,7 @@ function M.close(state)
   end
   state.view_buffers, state.view_windows, state.display = nil, nil, nil
   state.display_position, state.display_key = nil, nil
-  state.active_path = nil
+  state.active_path, state.active_file_id, state.active_display = nil, nil, nil
   M.restore_tabline()
   if tab then
     vim.api.nvim_exec_autocmds("User", { pattern = "CodeDiffReviewClose", modeline = false, data = { tabpage = tab, source_tabpage = state.tabpage } })
@@ -97,6 +102,14 @@ function M.open(state)
   if state.review_tabpage and vim.api.nvim_tabpage_is_valid(state.review_tabpage) then
     vim.api.nvim_set_current_tabpage(state.review_tabpage)
     return
+  end
+  local relative_numbers = {}
+  for _, side in ipairs({ "original", "modified" }) do
+    local source_win = state.session[side .. "_win"] or state.session.modified_win
+    relative_numbers[side] = vim.wo.relativenumber
+    if source_win and vim.api.nvim_win_is_valid(source_win) then
+      relative_numbers[side] = vim.wo[source_win].relativenumber
+    end
   end
   vim.cmd("tabnew")
   state.review_tabpage = vim.api.nvim_get_current_tabpage()
@@ -144,8 +157,22 @@ function M.open(state)
   vim.wo[wins.summary].winbar = "Guided Review"
   vim.api.nvim_win_set_height(wins.summary, math.max(3, math.min(7, math.floor(vim.o.lines * 0.18))))
   state.view_buffers, state.view_windows = bufs, wins
-  for _, win in pairs({ original = wins.original, modified = wins.modified }) do
+  local keymaps = require("codediff.keymap.resolve").keymaps_for("view")
+  for _, buf in pairs(bufs) do
+    vim.keymap.set("n", "<leader>v", function()
+      require("codediff.review").mark_seen()
+    end, { buffer = buf, silent = true, desc = "Mark review stop as reviewed" })
+    for name, direction in pairs({ next_hunk = 1, prev_hunk = -1 }) do
+      for _, key in ipairs(keymaps[name] or {}) do
+        vim.keymap.set("n", key, function()
+          M.navigate_hunk(state, direction)
+        end, { buffer = buf, silent = true, desc = direction == 1 and "Next hunk" or "Previous hunk" })
+      end
+    end
+  end
+  for side, win in pairs({ original = wins.original, modified = wins.modified }) do
     vim.wo[win].number = true
+    vim.wo[win].relativenumber = relative_numbers[side]
     vim.wo[win].statuscolumn = "%!v:lua.require'codediff.review.panel'.number()"
   end
   vim.api.nvim_set_current_win(wins.stops)
@@ -294,6 +321,49 @@ function M.render(state)
     select_file(state, display.blocks[1] and display.blocks[1].file_id)
   end
   state.rendering = false
+end
+
+function M.navigate_hunk(state, direction)
+  if state.status ~= "ready" or not state.display then
+    return false
+  end
+  local wins, bufs = state.view_windows, state.view_buffers
+  local side = vim.api.nvim_get_current_buf() == bufs.original and wins.original and "original" or "modified"
+  local win = wins[side]
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return false
+  end
+  local row = vim.api.nvim_win_get_cursor(win)[1]
+  local targets = {}
+  for _, block in ipairs(state.display.blocks) do
+    if block.change then
+      targets[#targets + 1] = block
+    end
+  end
+  if #targets == 0 then
+    return false
+  end
+  local cursor = require("codediff.ui.view.cursor")
+  local target
+  for offset = 1, #targets do
+    local index = direction == 1 and offset or #targets - offset + 1
+    local line = cursor.clamp_window_line(win, targets[index].rows[side])
+    if direction * (line - row) > 0 then
+      target = targets[index]
+      break
+    end
+  end
+  if not target and require("codediff.config").options.diff.cycle_next_hunk then
+    target = targets[direction == 1 and 1 or #targets]
+  end
+  if not target then
+    return false
+  end
+  vim.api.nvim_set_current_win(win)
+  vim.api.nvim_win_set_cursor(win, { cursor.clamp_window_line(win, target.rows[side]), 0 })
+  vim.cmd("normal! zz")
+  select_file(state, target.file_id)
+  return true
 end
 
 function M.jump(state, file_id, excerpt)

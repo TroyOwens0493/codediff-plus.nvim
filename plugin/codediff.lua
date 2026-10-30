@@ -36,21 +36,20 @@ end, {
 })
 
 vim.api.nvim_create_user_command("CodeDiffAI", function(opts)
-  local action = opts.args == "" and "toggle" or opts.args
-  if not vim.tbl_contains({ "toggle", "what", "why", "explain", "login", "status", "refresh", "cancel" }, action) then
-    vim.notify("Usage: :CodeDiffAI [toggle|what|why|explain|login|status|refresh|cancel]", vim.log.levels.ERROR)
+  local action = opts.args == "" and "status" or opts.args
+  if not vim.tbl_contains({ "login", "status" }, action) then
+    vim.notify("Usage: :CodeDiffAI [login|status]", vim.log.levels.ERROR)
     return
   end
-  require("codediff.ai").command(action, opts.range > 0 and opts.line1 or nil, opts.range > 0 and opts.line2 or nil)
+  require("codediff.ai").command(action)
 end, {
   nargs = "?",
-  range = true,
   complete = function(lead)
     return vim.tbl_filter(function(action)
       return action:sub(1, #lead) == lead
-    end, { "toggle", "what", "why", "explain", "login", "status", "refresh", "cancel" })
+    end, { "login", "status" })
   end,
-  desc = "ChatGPT sign-in, AI change summaries, and selected line explanations",
+  desc = "ChatGPT sign-in and account status",
 })
 
 vim.api.nvim_create_user_command("CodeDiffReview", function(opts)

@@ -255,6 +255,7 @@ Setup entry point:
 >lua
   require("codediff").setup({
     highlights = {
+      char_whole_line = true, -- Set false to highlight only changes within a line
       line_insert = "DiffAdd",
       line_delete = "DiffDelete",
       char_insert = nil,
@@ -267,6 +268,7 @@ Setup entry point:
     },
     diff = {
       layout = "side-by-side",
+      show_deleted_lines = true, -- Set false to hide original/deleted lines in inline layout
       filler_text = "╱",
       disable_inlay_hints = true,
       max_computation_time_ms = 5000,
@@ -551,6 +553,9 @@ Default behavior:
 - Character-level highlights auto-adjusted based on vim.o.background:
   - Dark themes: brightness multiplied by 1.4
   - Light themes: brightness multiplied by 0.92
+- Set highlights.char_whole_line = false to omit character highlights on fully
+  changed lines. Partial changes keep their character highlights. Line backgrounds
+  and gutter signs are controlled separately.
 
 Customization examples:
 >lua
@@ -608,9 +613,11 @@ GUIDED REVIEW                                          *codediff-review*
 
 This fork can generate a guided review with the configured Codex connection.
 Enable ai.enabled, open a comparison, then run :CodeDiffReview start.
+The agent excludes generated files, including lockfiles, build output, and
+generated clients, from review steps and code excerpts.
 The review opens a new tab named Guided Review. Stops appear on the left, a
 short summary split spans the top, and CodeDiff shows the selected stop's
-changes below. The original comparison stays open. No mappings are added.
+changes below. The original comparison stays open.
 >
   :CodeDiffReview start
   :CodeDiffReview step 1
@@ -634,6 +641,10 @@ does not take focus again when it finishes. Mark reviewed steps explicitly.
 Changed comparisons make the guide stale; use refresh to generate it again.
 Guides and progress are cached by comparison content. Merge conflict views are
 not supported. Follow-up answers use only the supplied comparison context.
+Use ]c and [c from any review pane to jump between changed blocks in the
+current stop. These keys use keymaps.view.next_hunk and prev_hunk, and respect
+diff.cycle_next_hunk.
+Press <leader>v in any review pane to mark the current stop as reviewed.
 
 AI output uses ai.timeout_ms as an inactivity limit (default: 120000 ms).
 Each response event, including reasoning or partial answer text, restarts the

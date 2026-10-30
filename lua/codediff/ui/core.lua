@@ -6,6 +6,7 @@ local highlights = require("codediff.ui.highlights")
 local filler_renderer = require("codediff.ui.filler")
 local gutter_signs = require("codediff.ui.gutter_signs")
 local compat = require("codediff.core.compat")
+local char_highlights = require("codediff.ui.char_highlights")
 
 -- Namespace references
 local ns_highlight = highlights.ns_highlight
@@ -75,6 +76,17 @@ local function utf16_col_to_byte_col(line, utf16_col)
 end
 
 local function apply_char_highlight(bufnr, char_range, hl_group, lines)
+  if config.options.highlights.char_whole_line == false then
+    char_highlights.each_partial_range(char_range, lines, function(row, start_col, end_col)
+      pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_highlight, row, start_col, {
+        end_col = end_col,
+        hl_group = hl_group,
+        priority = 200,
+      })
+    end)
+    return
+  end
+
   local start_line = char_range.start_line
   local start_col = char_range.start_col
   local end_line = char_range.end_line

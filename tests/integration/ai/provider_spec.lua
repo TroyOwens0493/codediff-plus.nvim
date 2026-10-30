@@ -9,7 +9,7 @@ describe("AI Codex provider", function()
     opts.command = { "python3", support.project_root .. "/tests/fixtures/ai/fake_codex.py", "ok" }
     opts.request_timeout_ms = 1000
     opts.timeout_ms = 1500
-    snapshot = { changes = { { id = 1 } }, payload = vim.json.encode({ file = "example.lua", changes = { { id = 1 } } }) }
+    snapshot = { payload = vim.json.encode({ question = "How does this change work?" }) }
   end)
 
   after_each(function()
@@ -19,8 +19,8 @@ describe("AI Codex provider", function()
 
   local function run()
     local done, err, result
-    provider.summarize(snapshot, opts, function(failure, summaries)
-      done, err, result = true, failure, summaries
+    provider.review_answer(snapshot, opts, function(failure, answer)
+      done, err, result = true, failure, answer
     end)
     assert.is_true(vim.wait(3000, function()
       return done
@@ -28,46 +28,16 @@ describe("AI Codex provider", function()
     return err, result
   end
 
-  it("uses managed ChatGPT auth and parses a fragmented JSONL summary", function()
+  it("uses managed ChatGPT auth and parses a fragmented JSONL answer", function()
     local err, result = run()
     assert.is_nil(err)
-    assert.same({
-      what = "Change 1 in example.lua. This explains its effect.",
-      why = "Purpose of change 1 in example.lua. This explains the broader goal.",
-    }, result[1])
+    assert.equals("Based on the supplied diff: How does this change work?", result)
   end)
 
   it("requires ChatGPT sign-in before sending code", function()
     opts.command[3] = "logged_out"
     local err = run()
     assert.is_truthy(err:find(":CodeDiffAI login", 1, true))
-  end)
-
-  it("uses the same managed connection for selected line explanations", function()
-    local done, err, result
-    provider.explain(
-      {
-        first_line = 7,
-        last_line = 8,
-        payload = vim.json.encode({
-          file = "example.lua",
-          side = "original",
-          lines = {
-            { line = 7, text = "return value" },
-            { line = 8, text = "end" },
-          },
-        }),
-      },
-      opts,
-      function(failure, explanations)
-        done, err, result = true, failure, explanations
-      end
-    )
-    assert.is_true(vim.wait(3000, function()
-      return done
-    end, 5))
-    assert.is_nil(err)
-    assert.same({ "Explain 7 in example.lua (original): return value", "Explain 8 in example.lua (original): end" }, result)
   end)
 
   it("reports a missing Codex executable", function()
@@ -77,7 +47,7 @@ describe("AI Codex provider", function()
   end)
 
   it("reports inference failures, malformed responses, and process exits", function()
-    for scenario, expected in pairs({ failed = "Usage limit reached", invalid = "invalid summary", crash = "exit 7" }) do
+    for scenario, expected in pairs({ failed = "Usage limit reached", invalid = "invalid answer", crash = "exit 7" }) do
       provider.stop()
       vim.wait(20)
       opts.command[3] = scenario
@@ -98,7 +68,7 @@ describe("AI Codex provider", function()
     opts.timeout_ms = 300
     local err, result = run()
     assert.is_nil(err)
-    assert.equals("Change 1 in example.lua. This explains its effect.", result[1].what)
+    assert.equals("Based on the supplied diff: How does this change work?", result)
   end)
 
   it("times out after a stream stops sending events", function()
@@ -118,7 +88,7 @@ describe("AI Codex provider", function()
   it("cancels without delivering a late result", function()
     opts.command[3] = "slow"
     local called = false
-    local stop = provider.summarize(snapshot, opts, function()
+    local stop = provider.review_answer(snapshot, opts, function()
       called = true
     end)
     vim.wait(50)

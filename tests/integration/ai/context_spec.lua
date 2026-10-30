@@ -57,12 +57,12 @@ describe("AI comparison capture", function()
     assert.is_false(context.is_current(snapshot, { original_bufnr = session.modified_bufnr, modified_bufnr = session.original_bufnr }))
   end)
 
-  it("changes the cache key when comparison context or summary preferences change", function()
+  it("changes the cache key when comparison context or model preferences change", function()
     local first = assert(set({ "old" }, { "new" }))
-    opts.detail = "brief"
+    opts.effort = "high"
     local second = assert(context.capture(session, opts))
     assert.is_true(first.key ~= second.key)
-    opts.detail = "detailed"
+    opts.effort = require("codediff.config").defaults.ai.effort
     assert.equals(first.key, assert(context.capture(session, opts)).key)
     assert.is_true(first.key ~= assert(set({ "older" }, { "new" })).key)
   end)

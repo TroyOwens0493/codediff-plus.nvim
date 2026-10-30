@@ -34,7 +34,7 @@ function M.build(snapshot, step)
     local label = string.format(
       "── %s%s%s ──",
       file.file,
-      file.group and " [" .. file.group .. "]" or "",
+      file.group and file.group ~= "unstaged" and " [" .. file.group .. "]" or "",
       block.change_id and " · change " .. block.change_id or " · no text changes"
     )
     block.rows = {}

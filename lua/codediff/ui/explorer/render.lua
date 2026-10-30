@@ -63,9 +63,7 @@ function M.create(data, tabpage, width)
     prepare_node = function(node)
       local current_width = split.winid and vim.api.nvim_win_is_valid(split.winid) and vim.api.nvim_win_get_width(split.winid) or text_width
       local selected = explorer.data.current_selection or {}
-      local progress = package.loaded["codediff.ai.progress"]
-      local loading = progress and progress.label(tabpage, selected.path)
-      return nodes_module.prepare_node(node, current_width, selected.path, selected.group, loading)
+      return nodes_module.prepare_node(node, current_width, selected.path, selected.group)
     end,
   })
   explorer.tree = tree

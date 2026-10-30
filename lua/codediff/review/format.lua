@@ -11,6 +11,7 @@ end
 function M.schema()
   local text, integer = { type = "string" }, { type = "integer" }
   return object({
+    generated_files = array(integer),
     steps = array(object({
       title = text,
       summary = text,
@@ -28,12 +29,15 @@ end
 function M.prompt(snapshot)
   return "Prepare a guided review of the supplied comparison. Explain intent and design, not a bug hunt or line-by-line narration."
     .. " Return 1 to 8 ordered steps, usually 2 to 6. Start with contracts/data, then implementation, callers, and tests. Group mechanical changes at the end."
+    .. " Exclude generated files, such as lockfiles, compiled or bundled output, generated clients, and files marked as generated."
+    .. " generated_files lists their file ids. Do not include them in steps, excerpts, files, notes, or questions. Review the source changes instead."
+    .. " If all files are generated, return one context-only step stating that there are no source changes to review."
     .. " Each step has a short title and a summary of 2 to 4 sentences explaining before/after and why this step matters."
     .. " attention is a short tradeoff or decision for the reader, or an empty string. Do not invent concerns."
     .. " excerpts select actual changed code by file_id, change_id, and side (original or modified)."
     .. " start_line and end_line are inclusive, 1-based source lines. Each excerpt must fit wholly inside that change's side range: start_line <= line < end_line in the input."
     .. " Use 1 to 3 excerpts per step, at most 25 lines each. Empty sides cannot be excerpted. Use original for deletions. caption is a short label."
-    .. " files lists other file ids covered by the step. Every input file must appear in an excerpt or in files; never omit mechanical or empty changes."
+    .. " files lists other file ids covered by the step. Every non-generated input file must appear in an excerpt or in files; include mechanical or empty source changes."
     .. " notes contains up to 3 explanations of why the code is shaped this way, anchored by 1-based excerpt index and a source line within it."
     .. " questions contains 0 to 2 short questions about intent the reader might ask. A context-only step may have no excerpts or files."
     .. " Use ASD-STE100 Simplified Technical English. Use plain text. Mark inferred intent as likely and state when intent is unknown."
@@ -65,6 +69,17 @@ function M.decode(encoded, snapshot)
     return nil, invalid
   end
   local covered, result = {}, {}
+  local generated_files = data.generated_files == nil and {} or data.generated_files
+  if not list(generated_files) then
+    return nil, invalid
+  end
+  local generated = {}
+  for _, id in ipairs(generated_files) do
+    if not integer(id) or not snapshot.files[id] then
+      return nil, invalid
+    end
+    generated[id], covered[id] = true, true
+  end
   for _, raw in ipairs(data.steps) do
     if
       type(raw) ~= "table"
@@ -84,7 +99,7 @@ function M.decode(encoded, snapshot)
       return nil, invalid
     end
     for _, excerpt in ipairs(raw.excerpts) do
-      if type(excerpt) ~= "table" or not integer(excerpt.file_id) or not integer(excerpt.change_id) then
+      if type(excerpt) ~= "table" or not integer(excerpt.file_id) or not integer(excerpt.change_id) or generated[excerpt.file_id] then
         return nil, invalid
       end
       local file = snapshot.files[excerpt.file_id]
@@ -116,7 +131,7 @@ function M.decode(encoded, snapshot)
       covered[excerpt.file_id] = true
     end
     for _, id in ipairs(raw.files) do
-      if not integer(id) or not snapshot.files[id] then
+      if not integer(id) or not snapshot.files[id] or generated[id] then
         return nil, invalid
       end
       if not vim.tbl_contains(step.files, id) then
@@ -167,7 +182,7 @@ function M.decode(encoded, snapshot)
       result[#result].summary = result[#result].summary .. " The guide did not explain the additional files listed here. Review them separately."
     end
   end
-  return result
+  return result, nil, generated_files
 end
 
 function M.excerpt_lines(snapshot, excerpt)

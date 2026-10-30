@@ -50,7 +50,7 @@ function M.capture(session, snapshot, opts, done)
       payload.comparison = comparison
       local encoded = vim.json.encode(payload)
       if #encoded > opts.max_input_bytes then
-        err = "This comparison is too large for AI summaries (limit: " .. opts.max_input_bytes .. " bytes)."
+        err = "This comparison is too large for guided review (limit: " .. opts.max_input_bytes .. " bytes)."
       else
         snapshot.payload = encoded
         snapshot.key = vim.fn.sha256(snapshot.key .. encoded)
@@ -138,7 +138,7 @@ function M.capture(session, snapshot, opts, done)
         end
         comparison.files[#comparison.files + 1] = { file = file.path, group = file.group, status = file.status, changes = changes }
         if #vim.json.encode(comparison) > opts.max_input_bytes then
-          finish("This comparison is too large for AI summaries (limit: " .. opts.max_input_bytes .. " bytes).")
+          finish("This comparison is too large for guided review (limit: " .. opts.max_input_bytes .. " bytes).")
           return
         end
         next_file()

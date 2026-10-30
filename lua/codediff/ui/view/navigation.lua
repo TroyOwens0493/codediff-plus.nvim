@@ -41,7 +41,10 @@ end
 function M.next_hunk()
   local tabpage = vim.api.nvim_get_current_tabpage()
   local session = lifecycle.get_session(tabpage)
-  if not session or not session.stored_diff_result then
+  if not session then
+    return require("codediff.review").navigate_hunk(1)
+  end
+  if not session.stored_diff_result then
     return false
   end
 
@@ -115,7 +118,10 @@ end
 function M.prev_hunk()
   local tabpage = vim.api.nvim_get_current_tabpage()
   local session = lifecycle.get_session(tabpage)
-  if not session or not session.stored_diff_result then
+  if not session then
+    return require("codediff.review").navigate_hunk(-1)
+  end
+  if not session.stored_diff_result then
     return false
   end
 

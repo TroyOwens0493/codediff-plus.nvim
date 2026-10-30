@@ -11,6 +11,15 @@ describe("Public API", function()
       assert.is_function(codediff.setup)
     end)
 
+    it("keeps guided review and sign-in without per-block or selected-line APIs", function()
+      assert.is_function(codediff.review_start)
+      assert.is_function(codediff.ai_login)
+      for _, name in ipairs({ "toggle_summary", "toggle_what_summary", "toggle_why_summary", "explain_selection", "summarize", "ai_status" }) do
+        assert.is_nil(codediff[name])
+      end
+      assert.same({ "login", "status" }, vim.fn.getcompletion("CodeDiffAI ", "cmdline"))
+    end)
+
     it("exports next_hunk function", function()
       assert.is_function(codediff.next_hunk)
     end)

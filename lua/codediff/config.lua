@@ -2,25 +2,16 @@
 local M = {}
 
 M.defaults = {
-  -- AI summaries use the locally installed Codex CLI and its ChatGPT login.
+  -- Guided reviews use the locally installed Codex CLI and its ChatGPT login.
   ai = {
     enabled = false,
-    auto_summary = true, -- Generate for the selected file; never open a popup automatically
-    loading_indicator = true, -- Spinner beside the selected explorer file while generating
-    keymap = "gs", -- Toggle what changed in diff panes; false disables this mapping
-    why_keymap = "gb", -- Toggle why it changed in diff panes; false disables this mapping
-    explain_keymap = "<leader>ge", -- Explain selected lines in Visual mode; false disables this mapping
     command = "codex", -- Executable or argv list
     model = nil, -- Use the user's configured Codex model
     effort = "low",
-    detail = "detailed", -- Sentences per summary: "brief" (one) or "detailed" (two or three)
     context_lines = 6,
     max_input_bytes = 1200000,
-    debounce_ms = 350,
     request_timeout_ms = 30000, -- Timeout for each setup or control request
     timeout_ms = 120000, -- Maximum inactivity during AI output; response events restart this timer
-    cache_size = 32, -- In-memory file comparisons; cleared when Neovim exits
-    popup = { border = "rounded", max_width = 72 },
   },
   -- Highlight configuration
   highlights = {
@@ -32,6 +23,7 @@ M.defaults = {
     -- If specified, these override char_brightness calculation
     char_insert = nil, -- Character-level insertions (if nil, derived from line_insert with char_brightness)
     char_delete = nil, -- Character-level deletions (if nil, derived from line_delete with char_brightness)
+    char_whole_line = true, -- Apply character highlights when a change covers the entire line
 
     -- Brightness multiplier for character-level highlights (only used if char_insert/char_delete are nil)
     -- nil = auto-detect based on background (1.4 for dark, 0.92 for light)
@@ -50,6 +42,7 @@ M.defaults = {
   -- Diff view behavior
   diff = {
     layout = "side-by-side", -- Diff layout: "side-by-side" or "inline"
+    show_deleted_lines = true, -- Show original/deleted lines in inline layout
     filler_text = "╱",
     disable_inlay_hints = true, -- Disable inlay hints in diff windows for cleaner view
     max_computation_time_ms = 5000, -- Maximum time for diff computation (5 seconds, VSCode default)
