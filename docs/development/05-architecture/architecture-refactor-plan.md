@@ -1,5 +1,62 @@
 # vscode-diff.nvim - Architecture Refactoring Plan
 
+## 2026-10-30: Source reduction audit
+
+The fork's current files were saved in baseline commit `ddcac4e` in an
+independent clone. This includes the local guided-review changes and the
+`show_deleted_lines` option. The active plugin directory was not edited.
+
+Three initial refactor commits share Git parsing, tree construction, conflict
+actions, key ownership, navigation, and character highlights. They remove
+2,160 production Lua lines. The native C code is unchanged. A later pass shares
+hunk transfers, panel setup, and conflict line comparisons.
+
+Use `python scripts/measure_source.py ddcac4e HEAD WORKTREE` to repeat the
+measurement. Counts include comments and blank lines. The report separates
+production Lua, production C, tests, vendor files, documentation, and build
+tools. Build output and binaries are excluded. Earlier feature removals in
+the local baseline do not count as refactor savings.
+
+The production baseline has 33,680 lines: 25,786 Lua and 7,894 C. A 50% cut
+would leave 16,840 lines. The initial pass leaves 31,520 lines, so another
+14,680 production lines would have to be removed.
+
+The later pass leaves 31,388 production lines. The total production reduction
+is 2,292 lines (6.8%); 14,548 more lines would have to be removed to reach 50%.
+
+The audit did not establish a feature-preserving design for that reduction.
+The remaining large areas include the native diff algorithms, session refresh
+coordination, key ownership, and the two view lifecycles. Inline views retain
+a hidden original buffer; two-pane and merge views keep visible virtual
+buffers whose lifetime depends on windows. A shared generic engine would
+need to retain those different loading, cleanup, focus, and event-order rules.
+Replacing these systems needs its own design and behavior evidence.
+
+The layout spec now shares pane fixtures and scenario data. Its 26 registered
+case names and their order are retained. The matrix also checks Result height
+with enough terminal space and with the real Explorer's fixed-size options.
+The first fixture version omitted those options; adding them made the new
+height assertion describe the actual Explorer configuration.
+
+Two mutation checks compare the original and consolidated specs. Disabling
+layout arrangement fails 12 original cases and 17 current cases, with every
+original detection retained. Disabling whole-file highlights fails the same
+four cases in each spec. This check found that default split sizes could make
+the new ratio case pass without arrangement. The fixture now starts with
+unequal widths so the test requires the code under test to arrange them.
+
+Validation includes the full 129-spec Lua suite, 2,624 comparisons of highlight
+calls and tree data against the starting implementation, the layout case
+inventory, and focused conflict, hunk, and panel checks. New readiness and key
+collision tests cover the shared helpers. No test cases or public entry points
+were removed to reduce the count.
+
+The 50% target remains unmet. Keep the verified reductions. Larger reductions
+must retain clear ownership and explicit buffer-lifetime rules.
+
+The sections below record the earlier module-splitting plan.
+
+
 > **Last Updated:** 2025-12-21  
 > **Status:** Planning Phase  
 > **Decision:** Rename `render/` → `ui/` for better semantic clarity and ecosystem alignment
