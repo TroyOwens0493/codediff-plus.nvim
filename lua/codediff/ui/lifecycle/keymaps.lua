@@ -1,8 +1,4 @@
--- Keymap ownership for diff sessions.
---
--- Translates a tabpage into that session's keymap registry, so callers only
--- need the tabpage they already have. Holds no mapping logic of its own: every
--- claim and release is delegated to codediff.keymap.
+-- Route session key operations through the registry that owns their mappings.
 local M = {}
 
 -- Eagerly loaded: these run from scheduled callbacks that may execute after the
@@ -58,8 +54,7 @@ end
 --- @param opts? table Optional keymap options (will be merged with buffer-local defaults)
 --- @return boolean success True if keymaps were set
 function M.set_tab_keymap(tabpage, mode, lhs, rhs, opts)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = get_active_diffs()[tabpage]
   if not sess then
     return false
   end
@@ -87,8 +82,7 @@ end
 --- @param meta? table { suspendable = boolean, priority = integer }
 --- @return boolean success
 function M.set_buf_keymap(tabpage, bufnr, mode, lhs, rhs, opts, meta)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = get_active_diffs()[tabpage]
   if not sess then
     -- No session to own the mapping (a panel built outside a diff tab, for
     -- example). Fall back to a plain buffer-local mapping so behavior matches
@@ -146,23 +140,20 @@ function M.begin_keymap_scope(tabpage, scope)
   end
 end
 
---- Finish a keymap setup pass, releasing claims it did not renew.
---- @param tabpage number
---- @param scope string|nil Names the pass to close; defaults to the innermost
-function M.end_keymap_scope(tabpage, scope)
-  local sess = get_active_diffs()[tabpage]
-  if sess and sess.keymaps then
-    sess.keymaps:end_scope(scope)
-  end
-end
-
---- Release every mapping belonging to `scope`.
---- @param tabpage number
---- @param scope string
-function M.release_keymap_scope(tabpage, scope)
-  local sess = get_active_diffs()[tabpage]
-  if sess and sess.keymaps then
-    sess.keymaps:release_scope(scope)
+-- These operations are no-ops until the session owns a registry.
+-- Suspend/resume affect borrowed file buffers; panel mappings stay installed.
+for name, method in pairs({
+  end_keymap_scope = "end_scope",
+  release_keymap_scope = "release_scope",
+  detach_keymap_buffer = "detach_buffer",
+  clear_tab_keymaps = "suspend",
+  restore_tab_keymaps = "resume",
+}) do
+  M[name] = function(tabpage, ...)
+    local sess = get_active_diffs()[tabpage]
+    if sess and sess.keymaps then
+      sess.keymaps[method](sess.keymaps, ...)
+    end
   end
 end
 
@@ -183,39 +174,6 @@ function M.del_buf_keymap(tabpage, bufnr, mode, lhs)
     return
   end
   sess.keymaps:release(bufnr, mode, lhs)
-end
-
---- Release every mapping the session installed on a buffer that is leaving it.
---- @param tabpage number
---- @param bufnr number
-function M.detach_keymap_buffer(tabpage, bufnr)
-  local sess = get_active_diffs()[tabpage]
-  if not sess or not sess.keymaps then
-    return
-  end
-  sess.keymaps:detach_buffer(bufnr)
-end
-
---- Suspend the session's mappings on borrowed (real file) buffers.
---- Called on TabLeave so codediff keys do not appear on those files in other
---- tabs. Panel mappings are registered as non-suspendable and stay installed.
---- @param tabpage number
-function M.clear_tab_keymaps(tabpage)
-  local sess = get_active_diffs()[tabpage]
-  if not sess or not sess.keymaps then
-    return
-  end
-  sess.keymaps:suspend()
-end
-
---- Reinstall mappings suspended by clear_tab_keymaps.
---- @param tabpage number
-function M.restore_tab_keymaps(tabpage)
-  local sess = get_active_diffs()[tabpage]
-  if not sess or not sess.keymaps then
-    return
-  end
-  sess.keymaps:resume()
 end
 
 --- Release every mapping the session installed, handing each key back to

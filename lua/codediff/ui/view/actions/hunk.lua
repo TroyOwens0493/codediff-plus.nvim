@@ -1,10 +1,4 @@
--- Hunk-level actions: locate the hunk under the cursor, and stage, unstage or
--- discard it.
---
--- Every action takes the session context built by ui/view/keymaps.lua rather
--- than closing over buffers and layout flags, so a mapping installed for one
--- diff cannot act on a stale buffer after a file switch or layout change.
-
+-- Hunk actions use the current session context so file switches cannot leave stale targets.
 local M = {}
 
 local lifecycle = require("codediff.ui.lifecycle")
@@ -67,99 +61,50 @@ local function build_hunk_patch(file_path, orig_lines, mod_lines, orig_start, mo
   return table.concat(parts, "\n") .. "\n"
 end
 
-function M.stage_hunk(ctx)
+local function change_index(ctx, reverse)
   local session = lifecycle.get_session(ctx.tabpage)
+  local verb = reverse and "unstage" or "stage"
   if not session or not session.git_root then
     vim.notify("Not in a git repository", vim.log.levels.WARN)
     return
   end
-
-  -- Only allow staging from unstaged views (working tree changes)
-  if session.modified_revision ~= nil then
-    vim.notify("Stage only works on unstaged changes", vim.log.levels.WARN)
+  if reverse and session.modified_revision ~= ":0" or not reverse and session.modified_revision ~= nil then
+    vim.notify(reverse and "Unstage only works on staged changes" or "Stage only works on unstaged changes", vim.log.levels.WARN)
     return
   end
-
-  local hunk, hunk_idx = M.find_hunk_at_cursor(ctx)
+  local hunk, index = M.find_hunk_at_cursor(ctx)
   if not hunk then
     vim.notify("No hunk at cursor position", vim.log.levels.WARN)
     return
   end
-
-  -- Get the file path relative to git root
-  local file_path = (session.original.relative ~= "" and session.original.relative) or session.modified.relative
-  if not file_path or file_path == "" then
-    vim.notify("No file path for staging", vim.log.levels.WARN)
+  local path = session.original.relative ~= "" and session.original.relative or session.modified.relative
+  if not path or path == "" then
+    vim.notify("No file path for " .. (reverse and "unstaging" or "staging"), vim.log.levels.WARN)
     return
   end
-
-  local stage_orig_buf, stage_mod_buf = lifecycle.get_buffers(ctx.tabpage)
-  if not stage_orig_buf or not stage_mod_buf or not vim.api.nvim_buf_is_valid(stage_orig_buf) or not vim.api.nvim_buf_is_valid(stage_mod_buf) then
+  local original, modified = lifecycle.get_buffers(ctx.tabpage)
+  if not original or not modified or not vim.api.nvim_buf_is_valid(original) or not vim.api.nvim_buf_is_valid(modified) then
     vim.notify("Diff buffers are no longer available", vim.log.levels.WARN)
     return
   end
-
-  -- Read lines from both buffers for this hunk
-  local orig_lines = vim.api.nvim_buf_get_lines(stage_orig_buf, hunk.original.start_line - 1, hunk.original.end_line - 1, false)
-  local mod_lines = vim.api.nvim_buf_get_lines(stage_mod_buf, hunk.modified.start_line - 1, hunk.modified.end_line - 1, false)
-
-  local patch = build_hunk_patch(file_path, orig_lines, mod_lines, hunk.original.start_line, hunk.modified.start_line)
-
-  local git = require("codediff.core.git")
-  git.apply_patch(session.git_root, patch, false, function(err)
+  local orig_lines = vim.api.nvim_buf_get_lines(original, hunk.original.start_line - 1, hunk.original.end_line - 1, false)
+  local mod_lines = vim.api.nvim_buf_get_lines(modified, hunk.modified.start_line - 1, hunk.modified.end_line - 1, false)
+  local patch = build_hunk_patch(path, orig_lines, mod_lines, hunk.original.start_line, hunk.modified.start_line)
+  require("codediff.core.git").apply_patch(session.git_root, patch, reverse, function(err)
     if err then
-      vim.notify("Failed to stage hunk: " .. err, vim.log.levels.ERROR)
+      vim.notify("Failed to " .. verb .. " hunk: " .. err, vim.log.levels.ERROR)
       return
     end
-    vim.notify(string.format("Staged hunk %d", hunk_idx), vim.log.levels.INFO)
+    vim.notify(string.format(reverse and "Unstaged hunk %d" or "Staged hunk %d", index), vim.log.levels.INFO)
   end)
 end
 
+function M.stage_hunk(ctx)
+  change_index(ctx, false)
+end
+
 function M.unstage_hunk(ctx)
-  local session = lifecycle.get_session(ctx.tabpage)
-  if not session or not session.git_root then
-    vim.notify("Not in a git repository", vim.log.levels.WARN)
-    return
-  end
-
-  -- Only allow unstaging from staged views
-  if session.modified_revision ~= ":0" then
-    vim.notify("Unstage only works on staged changes", vim.log.levels.WARN)
-    return
-  end
-
-  local hunk, hunk_idx = M.find_hunk_at_cursor(ctx)
-  if not hunk then
-    vim.notify("No hunk at cursor position", vim.log.levels.WARN)
-    return
-  end
-
-  local file_path = (session.original.relative ~= "" and session.original.relative) or session.modified.relative
-  if not file_path or file_path == "" then
-    vim.notify("No file path for unstaging", vim.log.levels.WARN)
-    return
-  end
-
-  local unstage_orig_buf, unstage_mod_buf = lifecycle.get_buffers(ctx.tabpage)
-  if not unstage_orig_buf or not unstage_mod_buf or not vim.api.nvim_buf_is_valid(unstage_orig_buf) or not vim.api.nvim_buf_is_valid(unstage_mod_buf) then
-    vim.notify("Diff buffers are no longer available", vim.log.levels.WARN)
-    return
-  end
-
-  -- Read lines from both buffers for this hunk
-  local orig_lines = vim.api.nvim_buf_get_lines(unstage_orig_buf, hunk.original.start_line - 1, hunk.original.end_line - 1, false)
-  local mod_lines = vim.api.nvim_buf_get_lines(unstage_mod_buf, hunk.modified.start_line - 1, hunk.modified.end_line - 1, false)
-
-  local patch = build_hunk_patch(file_path, orig_lines, mod_lines, hunk.original.start_line, hunk.modified.start_line)
-
-  local git = require("codediff.core.git")
-  git.apply_patch(session.git_root, patch, true, function(err)
-    if err then
-      vim.notify("Failed to unstage hunk: " .. err, vim.log.levels.ERROR)
-      return
-    end
-    vim.notify(string.format("Unstaged hunk %d", hunk_idx), vim.log.levels.INFO)
-  end)
+  change_index(ctx, true)
 end
 
 function M.discard_hunk(ctx)

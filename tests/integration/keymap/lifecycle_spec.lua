@@ -111,6 +111,15 @@ describe("keymap lifecycle", function()
       cleanup()
     end)
 
+    it("keeps the established priority when two custom view keys collide", function()
+      reset_config({ keymaps = { view = { toggle_explorer = "<F12>", open_in_prev_tab = "<F12>" } } })
+      local tabpage, mod_buf, cleanup = open_standalone({ "a" }, { "b" })
+      local session = lifecycle.get_session(tabpage)
+      require("codediff.ui.view.keymaps").setup_all_keymaps(tabpage, session.original_bufnr, mod_buf, true)
+      assert.equals("Open buffer in previous tab", matrix.map_index(mod_buf, "n")["<F12>"])
+      cleanup()
+    end)
+
     it("emits CodeDiffClose exactly once, before the session is destroyed", function()
       -- Note: lifecycle.close() runs `tabclose` first, and the resulting
       -- TabLeave already strips view mappings, so CodeDiffClose fires after

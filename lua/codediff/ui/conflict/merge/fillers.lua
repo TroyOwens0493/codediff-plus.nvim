@@ -5,10 +5,7 @@ local alignment = require("codediff.ui.conflict.merge.alignment")
 local compute_mapping_alignments = alignment.compute_mapping_alignments
 local get_alignments = alignment.get_alignments
 
-function M.compute_merge_fillers(base_to_input1_diff, base_to_input2_diff, base_lines, input1_lines, input2_lines)
-  -- Use VSCode's MappingAlignment.compute approach
-  local mapping_alignments = compute_mapping_alignments(base_to_input1_diff.changes, base_to_input2_diff.changes)
-
+local function collect_fillers(mapping_alignments)
   local all_left_fillers = {}
   local all_right_fillers = {}
   local left_total = 0
@@ -49,17 +46,16 @@ function M.compute_merge_fillers(base_to_input1_diff, base_to_input2_diff, base_
   return all_left_fillers, all_right_fillers
 end
 
+function M.compute_merge_fillers(base_to_input1_diff, base_to_input2_diff, base_lines, input1_lines, input2_lines)
+  return collect_fillers(compute_mapping_alignments(base_to_input1_diff.changes, base_to_input2_diff.changes))
+end
+
 -- Compute fillers AND identify which changes are in conflict regions
 -- A conflict region is where BOTH input1 and input2 have changes to the same base region
 -- This matches VSCode's behavior of only highlighting conflicting changes
 function M.compute_merge_fillers_and_conflicts(base_to_input1_diff, base_to_input2_diff, base_lines, input1_lines, input2_lines)
   -- Use VSCode's MappingAlignment.compute approach
   local mapping_alignments = compute_mapping_alignments(base_to_input1_diff.changes, base_to_input2_diff.changes)
-
-  local all_left_fillers = {}
-  local all_right_fillers = {}
-  local left_total = 0
-  local right_total = 0
 
   -- Track which changes are in conflict regions
   local conflict_left_changes = {}
@@ -91,37 +87,9 @@ function M.compute_merge_fillers_and_conflicts(base_to_input1_diff, base_to_inpu
         end
       end
     end
-
-    -- Get line alignments using VSCode's getAlignments
-    local alignments = get_alignments(
-      ma.base_range.start_line,
-      ma.base_range.end_line,
-      ma.output1_range.start_line,
-      ma.output1_range.end_line,
-      ma.output2_range.start_line,
-      ma.output2_range.end_line,
-      ma.inner1,
-      ma.inner2
-    )
-
-    -- Convert alignments to fillers
-    for _, a in ipairs(alignments) do
-      if a.input1_line and a.input2_line then
-        local left_adj = a.input1_line + left_total
-        local right_adj = a.input2_line + right_total
-        local mx = math.max(left_adj, right_adj)
-
-        if mx - left_adj > 0 then
-          table.insert(all_left_fillers, { after_line = a.input1_line - 1, count = mx - left_adj })
-          left_total = left_total + (mx - left_adj)
-        end
-        if mx - right_adj > 0 then
-          table.insert(all_right_fillers, { after_line = a.input2_line - 1, count = mx - right_adj })
-          right_total = right_total + (mx - right_adj)
-        end
-      end
-    end
   end
+
+  local all_left_fillers, all_right_fillers = collect_fillers(mapping_alignments)
 
   return {
     left_fillers = all_left_fillers,

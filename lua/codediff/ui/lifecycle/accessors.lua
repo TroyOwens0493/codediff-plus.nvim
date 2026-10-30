@@ -17,23 +17,79 @@ local function clear_gutter_signs(sess)
   gutter_signs.clear_buffer(sess.modified_bufnr)
 end
 
--- ============================================================================
--- PUBLIC API - GETTERS (return copies/values, safe)
--- ============================================================================
-
 --- Get session
 --- @param tabpage number
 --- @return table|nil
 function M.get_session(tabpage)
-  local active_diffs = get_active_diffs()
-  return active_diffs[tabpage]
+  return get_active_diffs()[tabpage]
 end
 
---- Get the session's side panel descriptor, or nil for a bare diff
-function M.get_panel(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  return sess and sess.panel or nil
+-- Simple accessors share missing-session behavior. Side effects stay explicit below.
+for name, field in pairs({
+  get_panel = "panel",
+  get_layout = "layout",
+  get_merge_base_lines = "merge_base_lines",
+  get_result_base_lines = "result_base_lines",
+  get_conflict_blocks = "conflict_blocks",
+}) do
+  M[name] = function(tabpage)
+    local sess = M.get_session(tabpage)
+    return sess and sess[field]
+  end
+end
+
+-- Paired getters always return two values, including when no session exists.
+for name, fields in pairs({
+  get_buffers = { "original_bufnr", "modified_bufnr" },
+  get_windows = { "original_win", "modified_win" },
+  get_paths = { "original", "modified" },
+  get_result = { "result_bufnr", "result_win" },
+}) do
+  M[name] = function(tabpage)
+    local sess = M.get_session(tabpage)
+    if not sess then
+      return nil, nil
+    end
+    return sess[fields[1]], sess[fields[2]]
+  end
+end
+
+for name, field in pairs({
+  update_suspended = "suspended",
+  update_git_root = "git_root",
+  set_result_base_lines = "result_base_lines",
+  set_merge_base_lines = "merge_base_lines",
+  set_conflict_blocks = "conflict_blocks",
+}) do
+  M[name] = function(tabpage, value)
+    local sess = M.get_session(tabpage)
+    if not sess then
+      return false
+    end
+    sess[field] = value
+    return true
+  end
+end
+
+-- merge_base_lines is stage :1; result_base_lines is the auto-merged Result seed.
+-- Keep them separate: discard uses merge-base coordinates, tracking uses the seed.
+
+-- Paired updates include nested counters and the two paths/revisions.
+for name, fields in pairs({
+  update_changedtick = { "original", "modified", "changedtick" },
+  update_mtime = { "original", "modified", "mtime" },
+  update_paths = { "original", "modified" },
+  update_revisions = { "original_revision", "modified_revision" },
+}) do
+  M[name] = function(tabpage, original, modified)
+    local sess = M.get_session(tabpage)
+    if not sess then
+      return false
+    end
+    local target = fields[3] and sess[fields[3]] or sess
+    target[fields[1]], target[fields[2]] = original, modified
+    return true
+  end
 end
 
 --- Name of the session's side panel, or nil for a bare diff
@@ -51,17 +107,9 @@ function M.event_mode(panel)
   return panel and panel.name or "standalone"
 end
 
---- Get current session layout
-function M.get_layout(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  return sess and sess.layout or nil
-end
-
 --- Get git context
 function M.get_git_context(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return nil
   end
@@ -71,37 +119,6 @@ function M.get_git_context(tabpage)
     original_revision = sess.original_revision,
     modified_revision = sess.modified_revision,
   }
-end
-
---- Get buffer IDs
-function M.get_buffers(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return nil, nil
-  end
-  return sess.original_bufnr, sess.modified_bufnr
-end
-
---- Get window IDs
-function M.get_windows(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return nil, nil
-  end
-  return sess.original_win, sess.modified_win
-end
-
---- Get path refs
----@return Path? original, Path? modified
-function M.get_paths(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return nil, nil
-  end
-  return sess.original, sess.modified
 end
 
 --- Find tabpage containing a buffer
@@ -129,8 +146,7 @@ end
 
 --- Check if original buffer is virtual
 function M.is_original_virtual(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -139,8 +155,7 @@ end
 
 --- Check if modified buffer is virtual
 function M.is_modified_virtual(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -149,63 +164,19 @@ end
 
 --- Check if suspended
 function M.is_suspended(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   return sess and sess.suspended or false
 end
 
 --- Get explorer reference (for explorer mode)
 function M.get_panel_view(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   return sess and sess.panel and sess.panel.view
-end
-
---- Get the merge base (stage :1) content for the conflict file.
---- This is the common ancestor — the real "original" — used by smart-combine
---- and discard operations that need merge-base coordinates. Distinct from
---- result_base_lines, which is the auto-merged *seed* content of the Result
---- buffer (and not the merge base).
-function M.get_merge_base_lines(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  return sess and sess.merge_base_lines
-end
-
---- Get the seed content of the Result buffer (auto-merged result).
---- This is what the Result buffer was initialized to, and what every
---- accept/discard action compares against to decide whether a conflict
---- region is still in its initial unresolved state. NOT the merge base —
---- see get_merge_base_lines for that.
-function M.get_result_base_lines(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  return sess and sess.result_base_lines
-end
-
---- Get result buffer and window
-function M.get_result(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return nil, nil
-  end
-  return sess.result_bufnr, sess.result_win
-end
-
---- Get conflict blocks for a session
---- @param tabpage number
---- @return table|nil List of conflict blocks
-function M.get_conflict_blocks(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  return sess and sess.conflict_blocks
 end
 
 --- Get all conflict files for a session
 function M.get_conflict_files(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return {}
   end
@@ -215,8 +186,7 @@ end
 --- Check if any conflict files have unsaved changes
 --- Returns list of unsaved file paths
 function M.get_unsaved_conflict_files(tabpage)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess or not sess.conflict_files then
     return {}
   end
@@ -234,26 +204,9 @@ function M.get_unsaved_conflict_files(tabpage)
   return unsaved
 end
 
--- ============================================================================
--- PUBLIC API - SETTERS (validated mutations)
--- ============================================================================
-
---- Update suspended state
-function M.update_suspended(tabpage, suspended)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-
-  sess.suspended = suspended
-  return true
-end
-
 --- Update session layout
 function M.update_layout(tabpage, layout)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -267,8 +220,7 @@ end
 
 --- Update diff result (cached)
 function M.update_diff_result(tabpage, diff_lines)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -280,52 +232,10 @@ function M.update_diff_result(tabpage, diff_lines)
   return true
 end
 
---- Update changedtick
-function M.update_changedtick(tabpage, original_tick, modified_tick)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-
-  sess.changedtick.original = original_tick
-  sess.changedtick.modified = modified_tick
-  return true
-end
-
---- Update mtime
-function M.update_mtime(tabpage, original_mtime, modified_mtime)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-
-  sess.mtime.original = original_mtime
-  sess.mtime.modified = modified_mtime
-  return true
-end
-
---- Update path refs (for file switching/sync)
----@param original Path
----@param modified Path
-function M.update_paths(tabpage, original, modified)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-
-  sess.original = original
-  sess.modified = modified
-  return true
-end
-
 --- Update buffer numbers (for file switching/sync when buffers change)
 --- Also updates buffer states (for suspend/resume to work correctly)
 function M.update_buffers(tabpage, original_bufnr, modified_bufnr)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -346,18 +256,11 @@ function M.update_buffers(tabpage, original_bufnr, modified_bufnr)
   -- the previous file keeps codediff's keys until the tab is closed.
   if sess.keymaps then
     local keep = {}
-    if original_bufnr then
-      keep[original_bufnr] = true
-    end
-    if modified_bufnr then
-      keep[modified_bufnr] = true
-    end
     local panel_view = sess.panel and sess.panel.view
-    if panel_view and panel_view.bufnr then
-      keep[panel_view.bufnr] = true
-    end
-    if sess.result_bufnr then
-      keep[sess.result_bufnr] = true
+    for _, buf in pairs({ original_bufnr, modified_bufnr, panel_view and panel_view.bufnr, sess.result_bufnr }) do
+      if buf then
+        keep[buf] = true
+      end
     end
     sess.keymaps:detach_buffers_except(keep)
   end
@@ -378,35 +281,9 @@ function M.update_buffers(tabpage, original_bufnr, modified_bufnr)
   return true
 end
 
---- Update git root (for file switching when changing repos)
-function M.update_git_root(tabpage, git_root)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-
-  sess.git_root = git_root
-  return true
-end
-
---- Update revisions (for file switching/sync)
-function M.update_revisions(tabpage, original_revision, modified_revision)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-
-  sess.original_revision = original_revision
-  sess.modified_revision = modified_revision
-  return true
-end
-
 --- Set explorer reference (for explorer mode)
 function M.set_panel_view(tabpage, view)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -426,8 +303,7 @@ end
 --- @param merge boolean|nil
 --- @return boolean success
 function M.update_merge(tabpage, merge)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -437,8 +313,7 @@ end
 
 --- Set result buffer and window (for conflict mode)
 function M.set_result(tabpage, result_bufnr, result_win)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end
@@ -469,49 +344,9 @@ function M.set_result(tabpage, result_bufnr, result_win)
   return true
 end
 
---- Store the seed content for the Result buffer (auto-merged result).
---- See get_result_base_lines for semantics.
-function M.set_result_base_lines(tabpage, result_base_lines)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-  sess.result_base_lines = result_base_lines
-  return true
-end
-
---- Store the merge base (stage :1) content for the conflict file.
---- See get_merge_base_lines for semantics; this is kept separate from
---- result_base_lines so smart-combine can still walk merge-base coordinates
---- after the Result buffer has been auto-merged.
-function M.set_merge_base_lines(tabpage, merge_base_lines)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-  sess.merge_base_lines = merge_base_lines
-  return true
-end
-
---- Store conflict blocks (mapping alignments) for a session
---- @param tabpage number
---- @param blocks table List of conflict blocks from compute_mapping_alignments
-function M.set_conflict_blocks(tabpage, blocks)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
-  if not sess then
-    return false
-  end
-  sess.conflict_blocks = blocks
-  return true
-end
-
 --- Track a file opened in conflict mode (for unsaved warning)
 function M.track_conflict_file(tabpage, file_path)
-  local active_diffs = get_active_diffs()
-  local sess = active_diffs[tabpage]
+  local sess = M.get_session(tabpage)
   if not sess then
     return false
   end

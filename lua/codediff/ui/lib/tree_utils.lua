@@ -58,95 +58,16 @@ function M.setup_fold_keymaps(opts)
     end
   end
 
-  local function fold_open()
-    local node = M.find_foldable_at_cursor(tree)
-    if not node then
-      return
-    end
-    node:expand()
-    update_tree_view(node)
-  end
-
-  local function fold_open_recursive()
-    local node = M.find_foldable_at_cursor(tree)
-    if not node then
-      return
-    end
-    node:expand_recursively()
-    update_tree_view(node)
-  end
-
-  local function fold_close()
-    local node = M.find_foldable_at_cursor(tree)
-    if not node then
-      return
-    end
-    node:collapse()
-    update_tree_view(node)
-  end
-
-  local function fold_close_recursive()
-    local node = M.find_foldable_at_cursor(tree)
-    if not node then
-      return
-    end
-    node:collapse_recursively()
-    update_tree_view(node)
-  end
-
-  local function fold_toggle()
-    local node = M.find_foldable_at_cursor(tree)
-    if not node then
-      return
-    end
-    if node:is_expanded() then
-      node:collapse()
-    else
-      node:expand()
-    end
-    update_tree_view(node)
-  end
-
-  local function fold_toggle_recursive()
-    local node = M.find_foldable_at_cursor(tree)
-    if not node then
-      return
-    end
-    if node:is_expanded() then
-      node:collapse_recursively()
-    else
-      node:expand_recursively()
-    end
-    update_tree_view(node)
-  end
-
-  local function fold_open_all()
-    local root = M.get_root_node(tree)
-    if not root then
-      return
-    end
-    root:expand_recursively()
-    update_tree_view(root)
-  end
-
-  local function fold_close_all()
-    local root = M.get_root_node(tree)
-    if not root then
-      return
-    end
-    root:collapse_recursively()
-    update_tree_view(root)
-  end
-
+  -- Bind the operation and its target together instead of repeating each handler.
   local fold_bindings = {
-    { key = "fold_open", fn = fold_open, desc = "Open fold" },
-    { key = "fold_open_recursive", fn = fold_open_recursive, desc = "Open fold recursively" },
-    { key = "fold_close", fn = fold_close, desc = "Close fold" },
-    { key = "fold_close_recursive", fn = fold_close_recursive, desc = "Close fold recursively" },
-    { key = "fold_toggle", fn = fold_toggle, desc = "Toggle fold" },
-    { key = "fold_toggle_recursive", fn = fold_toggle_recursive, desc = "Toggle fold recursively" },
-    { key = "fold_open_all", fn = fold_open_all, desc = "Open all folds" },
-    { key = "fold_close_all", fn = fold_close_all, desc = "Close all folds" },
+    { key = "fold_open", method = "expand", desc = "Open fold" },
+    { key = "fold_open_recursive", method = "expand_recursively", desc = "Open fold recursively" },
+    { key = "fold_close", method = "collapse", desc = "Close fold" },
+    { key = "fold_close_recursive", method = "collapse_recursively", desc = "Close fold recursively" },
+    { key = "fold_toggle", toggle = true, desc = "Toggle fold" },
+    { key = "fold_toggle_recursive", toggle = true, recursive = true, desc = "Toggle fold recursively" },
+    { key = "fold_open_all", method = "expand_recursively", root = true, desc = "Open all folds" },
+    { key = "fold_close_all", method = "collapse_recursively", root = true, desc = "Close all folds" },
   }
   local map_options = { noremap = true, silent = true, nowait = true }
   local lifecycle = require("codediff.ui.lifecycle")
@@ -155,7 +76,19 @@ function M.setup_fold_keymaps(opts)
     if key then
       -- Tree panels are codediff-owned scratch buffers: their mappings cannot
       -- leak elsewhere, so they stay installed across tab switches.
-      lifecycle.set_buf_keymap(tabpage, bufnr, "n", key, binding.fn, vim.tbl_extend("force", map_options, { desc = binding.desc }), { suspendable = false })
+      lifecycle.set_buf_keymap(tabpage, bufnr, "n", key, function()
+        local node = binding.root and M.get_root_node(tree) or M.find_foldable_at_cursor(tree)
+        if not node then
+          return
+        end
+        local method = binding.method
+        if binding.toggle then
+          method = node:is_expanded() and "collapse" or "expand"
+          method = method .. (binding.recursive and "_recursively" or "")
+        end
+        node[method](node)
+        update_tree_view(node)
+      end, vim.tbl_extend("force", map_options, { desc = binding.desc }), { suspendable = false })
     end
   end
 end

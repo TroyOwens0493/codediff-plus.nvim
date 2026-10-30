@@ -3,6 +3,7 @@
 local M = {}
 
 local Tree = require("codediff.ui.lib.tree")
+local file_tree = require("codediff.ui.lib.file_tree")
 local config = require("codediff.config")
 local line_layout = require("codediff.ui.explorer.line_layout")
 local line_stats = require("codediff.ui.explorer.line_stats")
@@ -34,14 +35,6 @@ local STATUS_SYMBOLS = {
   ["!"] = { symbol = "!", color = "CodeDiffStatusConflict" },
 }
 
--- Indent marker characters (neo-tree style)
-local INDENT_MARKERS = {
-  edge = "│", -- Vertical line for non-last items
-  item = "├", -- Branch for non-last items
-  last = "└", -- Branch for last item
-  none = " ", -- Space when parent was last item
-}
-
 -- Check if a file path matches merge artifact patterns
 local function is_merge_artifact(path)
   for _, pattern in ipairs(MERGE_ARTIFACT_PATTERNS) do
@@ -67,15 +60,7 @@ function M.filter_merge_artifacts(files)
   return filtered
 end
 
--- File icons (basic fallback)
-function M.get_file_icon(path)
-  local has_devicons, devicons = pcall(require, "nvim-web-devicons")
-  if has_devicons then
-    local icon, color = devicons.get_icon(path, nil, { default = true })
-    return icon or "", color
-  end
-  return "", nil
-end
+M.get_file_icon = file_tree.get_file_icon
 
 -- Folder icon (configurable via config, with nerd font defaults)
 function M.get_folder_icon(is_open)
@@ -110,186 +95,63 @@ local function normalize_files(files, group)
   return normalized
 end
 
--- Create flat file nodes (list mode)
+local function file_node(file, git_root, group, text, indent)
+  local icon, icon_color = M.get_file_icon(file.path)
+  local status = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
+  return Tree.Node({
+    text = text or file.path,
+    data = {
+      path = file.path,
+      status = file.status,
+      old_path = file.old_path,
+      icon = icon,
+      icon_color = icon_color,
+      status_symbol = status.symbol,
+      status_color = status.color,
+      git_root = git_root,
+      group = group,
+      indent_state = indent,
+      line_stats = file.line_stats,
+    },
+  })
+end
+
 function M.create_file_nodes(files, git_root, group)
   local nodes = {}
   for _, file in ipairs(files) do
-    local icon, icon_color = M.get_file_icon(file.path)
-    local status_info = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
-
-    nodes[#nodes + 1] = Tree.Node({
-      text = file.path,
-      data = {
-        path = file.path,
-        status = file.status,
-        old_path = file.old_path, -- For renames: original path before rename
-        icon = icon,
-        icon_color = icon_color,
-        status_symbol = status_info.symbol,
-        status_color = status_info.color,
-        git_root = git_root,
-        group = group,
-        line_stats = file.line_stats,
-      },
-    })
+    nodes[#nodes + 1] = file_node(file, git_root, group)
   end
   return nodes
 end
 
--- Create tree nodes with directory hierarchy (tree mode)
 function M.create_tree_file_nodes(files, git_root, group)
-  -- Build directory structure
-  local dir_tree = {}
-
-  for _, file in ipairs(files) do
-    local parts = {}
-    for part in file.path:gmatch("[^/]+") do
-      parts[#parts + 1] = part
-    end
-
-    local current = dir_tree
-    for i = 1, #parts - 1 do
-      local dir_name = parts[i]
-      if not current[dir_name] then
-        current[dir_name] = { _is_dir = true, _children = {}, _files = {} }
-      end
-      current[dir_name]._files[#current[dir_name]._files + 1] = file
-      current = current[dir_name]._children
-    end
-
-    -- Add file at leaf
-    local filename = parts[#parts]
-    current[filename] = {
-      _is_dir = false,
-      _file = file,
-    }
-  end
-
-  -- Flatten single-child directory chains (e.g., src/ -> components/ -> ui/ becomes src/components/ui/)
-  local function flatten_tree(subtree)
-    for key, item in pairs(subtree) do
-      if item._is_dir then
-        flatten_tree(item._children)
-        -- Check if this dir has exactly one child and it's a directory
-        local children_keys = {}
-        for k in pairs(item._children) do
-          children_keys[#children_keys + 1] = k
-        end
-        if #children_keys == 1 and item._children[children_keys[1]]._is_dir then
-          local child_key = children_keys[1]
-          local child = item._children[child_key]
-          local merged_key = key .. "/" .. child_key
-          subtree[merged_key] = child
-          subtree[key] = nil
-        end
-      end
-    end
-  end
-
-  local explorer_config = config.options.explorer or {}
-  if explorer_config.flatten_dirs ~= false then
-    flatten_tree(dir_tree)
-  end
-
-  -- Convert to Tree.Node recursively
-  -- indent_state: array of booleans, true = ancestor at that level is last child
-  local function build_nodes(subtree, parent_path, indent_state)
-    local nodes = {}
-    local sorted_keys = {}
-
-    for key in pairs(subtree) do
-      sorted_keys[#sorted_keys + 1] = key
-    end
-    -- Sort: directories first, then files, alphabetically
-    table.sort(sorted_keys, function(a, b)
-      local a_is_dir = subtree[a]._is_dir
-      local b_is_dir = subtree[b]._is_dir
-      if a_is_dir ~= b_is_dir then
-        return a_is_dir
-      end
-      return a < b
-    end)
-
-    local total = #sorted_keys
-    for idx, key in ipairs(sorted_keys) do
-      local item = subtree[key]
-      local full_path = parent_path ~= "" and (parent_path .. "/" .. key) or key
-      local is_last = (idx == total)
-
-      -- Copy parent indent state and add current level
-      local node_indent_state = {}
-      for i, v in ipairs(indent_state) do
-        node_indent_state[i] = v
-      end
-      node_indent_state[#node_indent_state + 1] = is_last
-
-      if item._is_dir then
-        -- Directory node - children need to know this dir's is_last status
-        local children = build_nodes(item._children, full_path, node_indent_state)
-        nodes[#nodes + 1] = Tree.Node({
-          text = key,
-          data = {
-            type = "directory",
-            name = key,
-            dir_path = full_path,
-            group = group,
-            indent_state = node_indent_state,
-            file_count = #item._files,
-            stats = line_stats.sum(item._files),
-            files = item._files,
-          },
-        }, children)
-      else
-        -- File node
-        local file = item._file
-        local icon, icon_color = M.get_file_icon(file.path)
-        local status_info = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
-
-        nodes[#nodes + 1] = Tree.Node({
-          text = key,
-          data = {
-            path = file.path,
-            status = file.status,
-            old_path = file.old_path,
-            icon = icon,
-            icon_color = icon_color,
-            status_symbol = status_info.symbol,
-            status_color = status_info.color,
-            git_root = git_root,
-            group = group,
-            indent_state = node_indent_state,
-            line_stats = file.line_stats,
-          },
-        })
-      end
-    end
-
-    return nodes
-  end
-
-  return build_nodes(dir_tree, "", {})
-end
-
-local function build_indent_markers(indent_state, use_indent_markers)
-  if not indent_state or #indent_state == 0 then
-    return ""
-  end
-  if not use_indent_markers then
-    return string.rep("  ", #indent_state)
-  end
-
-  local parts = {}
-  for index = 1, #indent_state - 1 do
-    parts[#parts + 1] = (indent_state[index] and INDENT_MARKERS.none or INDENT_MARKERS.edge) .. " "
-  end
-  parts[#parts + 1] = (indent_state[#indent_state] and INDENT_MARKERS.last or INDENT_MARKERS.item) .. " "
-  return table.concat(parts)
+  return file_tree.build(files, {
+    flatten = (config.options.explorer or {}).flatten_dirs ~= false,
+    file = function(file, name, indent)
+      return file_node(file, git_root, group, name, indent)
+    end,
+    directory = function(name, path, indent, entries)
+      return {
+        text = name,
+        data = {
+          type = "directory",
+          name = name,
+          dir_path = path,
+          group = group,
+          indent_state = indent,
+          file_count = #entries,
+          stats = line_stats.sum(entries),
+          files = entries,
+        },
+      }
+    end,
+  })
 end
 
 local function get_indent(node, data, explorer_config)
   local use_indent_markers = explorer_config.indent_markers ~= false
   if explorer_config.view_mode == "tree" and data.indent_state then
-    return build_indent_markers(data.indent_state, use_indent_markers), use_indent_markers and "NeoTreeIndentMarker" or "Normal"
+    return file_tree.indent(data.indent_state, use_indent_markers), use_indent_markers and "NeoTreeIndentMarker" or "Normal"
   end
   return string.rep("  ", node:get_depth() - 1), "Normal"
 end

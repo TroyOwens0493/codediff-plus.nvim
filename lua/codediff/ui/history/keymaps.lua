@@ -25,60 +25,16 @@ function M.setup(history, opts)
     lifecycle.set_buf_keymap(opts.tabpage, split.bufnr, "n", lhs, rhs, vim.tbl_extend("force", map_options, { desc = desc }), { suspendable = false })
   end
 
-  -- Toggle expand/collapse or select file
-  if history_keymaps.select then
-    panel_map(history_keymaps.select, function()
-      local node = tree:get_node()
-      if not node then
-        return
-      end
-
-      if node.data and node.data.type == "commit" then
-        if is_single_file_mode then
-          -- Single file mode: directly show diff for the file at this commit
-          local file_path = node.data.file_path or opts.file_path
-          local file_data = {
-            path = file_path,
-            commit_hash = node.data.hash,
-            git_root = opts.git_root,
-          }
-          history.on_file_select(file_data)
-        elseif node:is_expanded() then
-          node:collapse()
-          tree:render()
-        else
-          load_commit_files(node)
-        end
-      elseif node.data and node.data.type == "directory" then
-        if node:is_expanded() then
-          node:collapse()
-        else
-          node:expand()
-        end
-        tree:render()
-      elseif node.data and node.data.type == "file" then
-        history.on_file_select(node.data)
-      end
-    end, "Select/toggle entry")
-  end
-
-  -- Double-click support
-  panel_map("<2-LeftMouse>", function()
+  -- Keyboard and mouse selection follow the same commit/directory/file rules.
+  local function select_entry()
     local node = tree:get_node()
     if not node then
       return
     end
-    if node.data and node.data.type == "file" then
-      history.on_file_select(node.data)
-    elseif node.data and node.data.type == "directory" then
-      if node:is_expanded() then
-        node:collapse()
-      else
-        node:expand()
-      end
-      tree:render()
-    elseif node.data and node.data.type == "commit" then
+
+    if node.data and node.data.type == "commit" then
       if is_single_file_mode then
+        -- Single file mode: directly show diff for the file at this commit
         local file_path = node.data.file_path or opts.file_path
         local file_data = {
           path = file_path,
@@ -92,8 +48,21 @@ function M.setup(history, opts)
       else
         load_commit_files(node)
       end
+    elseif node.data and node.data.type == "directory" then
+      if node:is_expanded() then
+        node:collapse()
+      else
+        node:expand()
+      end
+      tree:render()
+    elseif node.data and node.data.type == "file" then
+      history.on_file_select(node.data)
     end
-  end, "Select file")
+  end
+  if history_keymaps.select then
+    panel_map(history_keymaps.select, select_entry, "Select/toggle entry")
+  end
+  panel_map("<2-LeftMouse>", select_entry, "Select file")
 
   -- Note: next_file/prev_file keymaps are set via view/keymaps.lua:setup_all_keymaps()
   -- which uses set_tab_keymap to set them on all buffers including history panel

@@ -150,25 +150,16 @@ end
 
 --- Add a node (optionally as child of parent_id)
 function Tree:add_node(node, parent_id)
-  if parent_id then
-    local parent = self._nodes_by_id[parent_id]
-    if parent then
-      parent._children[#parent._children + 1] = node
-      node._parent_id = parent_id
-      node._depth = parent._depth + 1
-      self._nodes_by_id[node._id] = node
-      if #node._children > 0 then
-        self:_register_nodes(node._children, node._depth + 1)
-      end
-    end
-  else
-    self._nodes[#self._nodes + 1] = node
-    node._depth = 1
-    self._nodes_by_id[node._id] = node
-    if #node._children > 0 then
-      self:_register_nodes(node._children, 2)
-    end
+  local parent = parent_id and self._nodes_by_id[parent_id]
+  if parent_id and not parent then
+    return
   end
+  local siblings = parent and parent._children or self._nodes
+  siblings[#siblings + 1] = node
+  if parent then
+    node._parent_id = parent_id
+  end
+  self:_register_nodes({ node }, parent and parent._depth + 1 or 1)
 end
 
 --- Remove a node by ID
@@ -178,22 +169,12 @@ function Tree:remove_node(node_id)
     return
   end
 
-  if node._parent_id then
-    local parent = self._nodes_by_id[node._parent_id]
-    if parent then
-      for i, child in ipairs(parent._children) do
-        if child._id == node_id then
-          table.remove(parent._children, i)
-          break
-        end
-      end
-    end
-  else
-    for i, n in ipairs(self._nodes) do
-      if n._id == node_id then
-        table.remove(self._nodes, i)
-        break
-      end
+  local parent = node._parent_id and self._nodes_by_id[node._parent_id]
+  local siblings = node._parent_id and (parent and parent._children or {}) or self._nodes
+  for i, child in ipairs(siblings) do
+    if child._id == node_id then
+      table.remove(siblings, i)
+      break
     end
   end
 
@@ -255,24 +236,20 @@ function Tree:render()
     node._line = i
     self._line_to_node[i] = node
 
-    if self._prepare_node then
-      local line_obj = self._prepare_node(node)
-      if line_obj and line_obj._segments then
-        lines[i] = line_obj:content()
-        -- Collect highlight segments
-        local hl_entries = {}
-        local col = 0
-        for _, seg in ipairs(line_obj._segments) do
-          if seg.hl and seg.hl ~= "" and #seg.text > 0 then
-            hl_entries[#hl_entries + 1] = { col, col + #seg.text, seg.hl }
-          end
-          col = col + #seg.text
+    local line_obj = self._prepare_node and self._prepare_node(node)
+    if line_obj and line_obj._segments then
+      lines[i] = line_obj:content()
+      -- Collect highlight segments
+      local hl_entries = {}
+      local col = 0
+      for _, seg in ipairs(line_obj._segments) do
+        if seg.hl and seg.hl ~= "" and #seg.text > 0 then
+          hl_entries[#hl_entries + 1] = { col, col + #seg.text, seg.hl }
         end
-        if #hl_entries > 0 then
-          line_highlights[i] = hl_entries
-        end
-      else
-        lines[i] = node.text or ""
+        col = col + #seg.text
+      end
+      if #hl_entries > 0 then
+        line_highlights[i] = hl_entries
       end
     else
       lines[i] = node.text or ""

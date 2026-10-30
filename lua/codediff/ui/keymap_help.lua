@@ -27,12 +27,7 @@ end
 --- Entry = { key, desc } or nil (skipped)
 --- Section = { title, entries[] }
 
--- Collect a section of keymap entries, keeping only keys the session actually
--- has mapped. `is_bound` is what stops this list from drifting: an entry that
--- is disabled in config, or not applicable to the current session shape, is
--- simply not installed and therefore not advertised.
---
--- An action can answer to several keys, so every key really bound is listed.
+-- List only keys the registry owns, including every alias for an action.
 local function section(title, entries, is_bound)
   local items = {}
   for _, e in ipairs(entries) do
@@ -47,113 +42,102 @@ local function section(title, entries, is_bound)
   return { title = title, items = items }
 end
 
--- Build sections for the current session.
---
--- Section inclusion follows the session shape (a standalone diff has no
--- explorer panel). Entry inclusion follows what is actually installed, so a
--- key that is disabled in config, or not applicable to the current view, is
--- never advertised. `is_bound` is what keeps this list from drifting.
+-- Session shape selects sections; registry ownership selects entries.
 local function build_sections(keymaps, is_bound, shape)
   local sections = {}
+  local function add(title, entries)
+    local value = section(title, entries, is_bound)
+    if value then
+      sections[#sections + 1] = value
+    end
+  end
   local km = keymaps.view
 
-  table.insert(
-    sections,
-    section("VIEW", {
-      { km.quit, "Close codediff tab" },
-      { km.next_hunk, "Next hunk" },
-      { km.prev_hunk, "Previous hunk" },
-      { km.diff_get, "Get change from other buffer" },
-      { km.diff_put, "Put change to other buffer" },
-      { km.open_in_prev_tab, "Open buffer in previous tab" },
-      { km.next_file, "Next file" },
-      { km.prev_file, "Previous file" },
-      { km.toggle_explorer, "Toggle explorer" },
-      { km.focus_explorer, "Focus explorer" },
-      { km.toggle_stage, "Stage/unstage current file" },
-      { km.toggle_staged_view, "Toggle staged/unstaged view for current file" },
-      { km.stage_hunk, "Stage hunk under cursor" },
-      { km.unstage_hunk, "Unstage hunk under cursor" },
-      { km.discard_hunk, "Discard hunk under cursor" },
-      { km.toggle_layout, "Toggle inline/side-by-side layout" },
-      { km.align_move, "Align moved code block" },
-      { km.toggle_compact, "Toggle compact mode (fold unchanged)" },
-      { km.hunk_textobject, "Hunk textobject (visual/operator)" },
-      { km.show_help, "Toggle this help" },
-    }, is_bound)
-  )
+  add("VIEW", {
+    { km.quit, "Close codediff tab" },
+    { km.next_hunk, "Next hunk" },
+    { km.prev_hunk, "Previous hunk" },
+    { km.diff_get, "Get change from other buffer" },
+    { km.diff_put, "Put change to other buffer" },
+    { km.open_in_prev_tab, "Open buffer in previous tab" },
+    { km.next_file, "Next file" },
+    { km.prev_file, "Previous file" },
+    { km.toggle_explorer, "Toggle explorer" },
+    { km.focus_explorer, "Focus explorer" },
+    { km.toggle_stage, "Stage/unstage current file" },
+    { km.toggle_staged_view, "Toggle staged/unstaged view for current file" },
+    { km.stage_hunk, "Stage hunk under cursor" },
+    { km.unstage_hunk, "Unstage hunk under cursor" },
+    { km.discard_hunk, "Discard hunk under cursor" },
+    { km.toggle_layout, "Toggle inline/side-by-side layout" },
+    { km.align_move, "Align moved code block" },
+    { km.toggle_compact, "Toggle compact mode (fold unchanged)" },
+    { km.hunk_textobject, "Hunk textobject (visual/operator)" },
+    { km.show_help, "Toggle this help" },
+  })
 
   if shape.explorer then
     local ekm = keymaps.explorer
-    table.insert(
-      sections,
-      section("EXPLORER", {
-        { ekm.select, "Select / toggle expand" },
-        { MOUSE_SELECT, "Select file (double click)" },
-        { "j", "Move down / auto-open file" },
-        { "k", "Move up / auto-open file" },
-        { "<Down>", "Move down / auto-open file" },
-        { "<Up>", "Move up / auto-open file" },
-        { ekm.hover, "Show full path" },
-        { ekm.refresh, "Refresh explorer" },
-        { ekm.toggle_view_mode, "Toggle list/tree view" },
-        { ekm.stage_all, "Stage all files" },
-        { ekm.unstage_all, "Unstage all files" },
-        { ekm.restore, "Discard changes to file" },
-        { ekm.toggle_changes, "Toggle Changes visibility" },
-        { ekm.toggle_staged, "Toggle Staged visibility" },
-        { ekm.fold_open, "Open fold" },
-        { ekm.fold_open_recursive, "Open fold recursively" },
-        { ekm.fold_close, "Close fold" },
-        { ekm.fold_close_recursive, "Close fold recursively" },
-        { ekm.fold_toggle, "Toggle fold" },
-        { ekm.fold_toggle_recursive, "Toggle fold recursively" },
-        { ekm.fold_open_all, "Open all folds" },
-        { ekm.fold_close_all, "Close all folds" },
-      }, is_bound)
-    )
+    add("EXPLORER", {
+      { ekm.select, "Select / toggle expand" },
+      { MOUSE_SELECT, "Select file (double click)" },
+      { "j", "Move down / auto-open file" },
+      { "k", "Move up / auto-open file" },
+      { "<Down>", "Move down / auto-open file" },
+      { "<Up>", "Move up / auto-open file" },
+      { ekm.hover, "Show full path" },
+      { ekm.refresh, "Refresh explorer" },
+      { ekm.toggle_view_mode, "Toggle list/tree view" },
+      { ekm.stage_all, "Stage all files" },
+      { ekm.unstage_all, "Unstage all files" },
+      { ekm.restore, "Discard changes to file" },
+      { ekm.toggle_changes, "Toggle Changes visibility" },
+      { ekm.toggle_staged, "Toggle Staged visibility" },
+      { ekm.fold_open, "Open fold" },
+      { ekm.fold_open_recursive, "Open fold recursively" },
+      { ekm.fold_close, "Close fold" },
+      { ekm.fold_close_recursive, "Close fold recursively" },
+      { ekm.fold_toggle, "Toggle fold" },
+      { ekm.fold_toggle_recursive, "Toggle fold recursively" },
+      { ekm.fold_open_all, "Open all folds" },
+      { ekm.fold_close_all, "Close all folds" },
+    })
   end
 
   if shape.history then
     local hkm = keymaps.history
-    table.insert(
-      sections,
-      section("HISTORY", {
-        { hkm.select, "Select commit/file or toggle" },
-        { MOUSE_SELECT, "Select commit/file (double click)" },
-        { hkm.toggle_view_mode, "Toggle list/tree view" },
-        { hkm.refresh, "Refresh history" },
-        { hkm.fold_open, "Open fold" },
-        { hkm.fold_open_recursive, "Open fold recursively" },
-        { hkm.fold_close, "Close fold" },
-        { hkm.fold_close_recursive, "Close fold recursively" },
-        { hkm.fold_toggle, "Toggle fold" },
-        { hkm.fold_toggle_recursive, "Toggle fold recursively" },
-        { hkm.fold_open_all, "Open all folds" },
-        { hkm.fold_close_all, "Close all folds" },
-      }, is_bound)
-    )
+    add("HISTORY", {
+      { hkm.select, "Select commit/file or toggle" },
+      { MOUSE_SELECT, "Select commit/file (double click)" },
+      { hkm.toggle_view_mode, "Toggle list/tree view" },
+      { hkm.refresh, "Refresh history" },
+      { hkm.fold_open, "Open fold" },
+      { hkm.fold_open_recursive, "Open fold recursively" },
+      { hkm.fold_close, "Close fold" },
+      { hkm.fold_close_recursive, "Close fold recursively" },
+      { hkm.fold_toggle, "Toggle fold" },
+      { hkm.fold_toggle_recursive, "Toggle fold recursively" },
+      { hkm.fold_open_all, "Open all folds" },
+      { hkm.fold_close_all, "Close all folds" },
+    })
   end
 
   if shape.conflict then
     local ckm = keymaps.conflict
-    table.insert(
-      sections,
-      section("CONFLICT", {
-        { ckm.accept_incoming, "Accept incoming (theirs)" },
-        { ckm.accept_current, "Accept current (ours)" },
-        { ckm.accept_both, "Accept both changes" },
-        { ckm.discard, "Discard both (keep base)" },
-        { ckm.accept_all_incoming, "Accept ALL incoming" },
-        { ckm.accept_all_current, "Accept ALL current" },
-        { ckm.accept_all_both, "Accept ALL both" },
-        { ckm.discard_all, "Discard ALL (reset to base)" },
-        { ckm.next_conflict, "Next conflict" },
-        { ckm.prev_conflict, "Previous conflict" },
-        { ckm.diffget_incoming, "Get hunk from incoming" },
-        { ckm.diffget_current, "Get hunk from current" },
-      }, is_bound)
-    )
+    add("CONFLICT", {
+      { ckm.accept_incoming, "Accept incoming (theirs)" },
+      { ckm.accept_current, "Accept current (ours)" },
+      { ckm.accept_both, "Accept both changes" },
+      { ckm.discard, "Discard both (keep base)" },
+      { ckm.accept_all_incoming, "Accept ALL incoming" },
+      { ckm.accept_all_current, "Accept ALL current" },
+      { ckm.accept_all_both, "Accept ALL both" },
+      { ckm.discard_all, "Discard ALL (reset to base)" },
+      { ckm.next_conflict, "Next conflict" },
+      { ckm.prev_conflict, "Previous conflict" },
+      { ckm.diffget_incoming, "Get hunk from incoming" },
+      { ckm.diffget_current, "Get hunk from current" },
+    })
   end
 
   return sections
@@ -169,11 +153,6 @@ local function group_width(sections)
   end
   -- key_col + " → " (4 display cells) + desc + padding
   return math.max(KEY_COL + 4 + max_desc + 3, 40)
-end
-
--- Compute the required window width from sections (single-column layout)
-local function compute_width(sections)
-  return group_width(sections)
 end
 
 -- Render one group of sections into vertical lines (no column composition).
@@ -307,7 +286,7 @@ function M.toggle(tabpage)
     end
   end
   if not lines then
-    win_width = compute_width(sections)
+    win_width = group_width(sections)
     lines, hls = render_group(sections, win_width)
   end
 

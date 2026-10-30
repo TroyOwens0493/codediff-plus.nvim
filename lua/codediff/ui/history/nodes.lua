@@ -3,6 +3,7 @@
 local M = {}
 
 local Tree = require("codediff.ui.lib.tree")
+local file_tree = require("codediff.ui.lib.file_tree")
 local Line = require("codediff.ui.lib.line")
 local config = require("codediff.config")
 
@@ -14,14 +15,8 @@ local STATUS_SYMBOLS = {
   R = { symbol = "R", color = "CodeDiffStatusRenamed" },
 }
 
--- Render a commit date for display in the history view (#340).
--- Presentation-layer concern; git already returns the raw `%at` timestamp AND a
--- pre-formatted `%ar` relative string, so we consume those instead of asking
--- git for anything new. Config value semantics mirror git's placeholders:
---   "%ar" (default) → use git's own relative string ("6 months ago")
---   "%ai"           → ISO 8601 like "2026-01-15 12:34:56 -0500"
---   "%ad"           → git's baseline default ("Fri Feb 17 12:34:56 2023 -0500")
---   any other       → treated as an os.date/strftime format string
+-- %ar uses Git's relative date; %ai and %ad map to Git's absolute formats.
+-- Other values are os.date format strings. Invalid timestamps keep the relative date.
 local function format_commit_date(timestamp, date_relative)
   local fmt = (config.options.history and config.options.history.date_format) or "%ar"
   if fmt == "%ar" then
@@ -43,46 +38,40 @@ local function format_commit_date(timestamp, date_relative)
   return os.date(fmt, ts)
 end
 
--- File icons (basic fallback)
-function M.get_file_icon(path)
-  local has_devicons, devicons = pcall(require, "nvim-web-devicons")
-  if has_devicons then
-    local icon, color = devicons.get_icon(path, nil, { default = true })
-    return icon or "", color
-  end
-  return "", nil
+M.get_file_icon = file_tree.get_file_icon
+
+local function file_node(file, hash, git_root, text, indent, is_last)
+  local icon, color = M.get_file_icon(file.path)
+  local status = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
+  return Tree.Node({
+    id = "file:" .. hash .. ":" .. file.path,
+    text = text or file.path,
+    data = {
+      type = "file",
+      path = file.path,
+      old_path = file.old_path,
+      status = file.status,
+      icon = icon,
+      icon_color = color,
+      status_symbol = status.symbol,
+      status_color = status.color,
+      git_root = git_root,
+      commit_hash = hash,
+      is_last = is_last,
+      indent_state = indent,
+    },
+  })
 end
 
--- Create commit node with its file children
--- commit: { hash, short_hash, author, date, date_relative, subject }
--- files: { { path, status, old_path }, ... }
--- git_root: absolute path to git repository root
-function M.create_commit_node(commit, files, git_root)
-  local file_nodes = {}
-
+local function list_files(files, hash, git_root, indent)
+  local nodes = {}
   for i, file in ipairs(files) do
-    local icon, icon_color = M.get_file_icon(file.path)
-    local status_info = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
-
-    file_nodes[#file_nodes + 1] = Tree.Node({
-      text = file.path,
-      id = "file:" .. commit.hash .. ":" .. file.path,
-      data = {
-        type = "file",
-        path = file.path,
-        old_path = file.old_path,
-        status = file.status,
-        icon = icon,
-        icon_color = icon_color,
-        status_symbol = status_info.symbol,
-        status_color = status_info.color,
-        git_root = git_root,
-        commit_hash = commit.hash,
-        is_last = i == #files,
-      },
-    })
+    nodes[#nodes + 1] = file_node(file, hash, git_root, nil, indent and { i == #files } or nil, i == #files)
   end
+  return nodes
+end
 
+function M.create_commit_node(commit, files, git_root)
   return Tree.Node({
     text = commit.subject,
     id = "commit:" .. commit.hash,
@@ -97,150 +86,47 @@ function M.create_commit_node(commit, files, git_root)
       file_count = #files,
       git_root = git_root,
     },
-  }, file_nodes)
+  }, list_files(files, commit.hash, git_root, false))
 end
 
--- Create flat list file nodes for a commit
--- files: array of { path, status, old_path }
--- commit_hash: the commit hash these files belong to
--- git_root: absolute path to git repository root
 function M.create_list_file_nodes(files, commit_hash, git_root)
-  local file_nodes = {}
-
-  for i, file in ipairs(files) do
-    local icon, icon_color = M.get_file_icon(file.path)
-    local status_info = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
-
-    file_nodes[#file_nodes + 1] = Tree.Node({
-      id = "file:" .. commit_hash .. ":" .. file.path,
-      text = file.path,
-      data = {
-        type = "file",
-        path = file.path,
-        old_path = file.old_path,
-        status = file.status,
-        icon = icon,
-        icon_color = icon_color,
-        status_symbol = status_info.symbol,
-        status_color = status_info.color,
-        git_root = git_root,
-        commit_hash = commit_hash,
-        is_last = i == #files,
-        indent_state = { i == #files },
-      },
-    })
-  end
-
-  return file_nodes
+  return list_files(files, commit_hash, git_root, true)
 end
 
--- Create tree file nodes for a commit (organized by directory)
--- files: array of { path, status, old_path }
--- commit_hash: the commit hash these files belong to
--- git_root: absolute path to git repository root
 function M.create_tree_file_nodes(files, commit_hash, git_root)
-  -- Build directory structure
-  local dir_tree = {}
+  return file_tree.build(files, {
+    file = function(file, name, indent)
+      return file_node(file, commit_hash, git_root, name, indent)
+    end,
+    directory = function(name, path, indent)
+      return {
+        id = "dir:" .. commit_hash .. ":" .. path,
+        text = name,
+        data = {
+          type = "directory",
+          name = name,
+          dir_path = path,
+          commit_hash = commit_hash,
+          git_root = git_root,
+          indent_state = indent,
+        },
+      }
+    end,
+  })
+end
 
-  for _, file in ipairs(files) do
-    local parts = {}
-    for part in file.path:gmatch("[^/]+") do
-      parts[#parts + 1] = part
+local function selected_highlight(is_selected)
+  local bg = is_selected and vim.api.nvim_get_hl(0, { name = "CodeDiffExplorerSelected", link = false }).bg or nil
+  return function(default)
+    local base = default or "Normal"
+    if not is_selected then
+      return base
     end
-
-    local current = dir_tree
-    for i = 1, #parts - 1 do
-      local dir_name = parts[i]
-      if not current[dir_name] then
-        current[dir_name] = { _is_dir = true, _children = {} }
-      end
-      current = current[dir_name]._children
-    end
-
-    -- Add file at leaf
-    local filename = parts[#parts]
-    current[filename] = {
-      _is_dir = false,
-      _file = file,
-    }
+    local name = "CodeDiffHistorySel_" .. base:gsub("[^%w]", "_")
+    local hl = vim.api.nvim_get_hl(0, { name = base, link = false })
+    vim.api.nvim_set_hl(0, name, { fg = hl.fg, bg = bg })
+    return name
   end
-
-  -- Convert to Tree.Node recursively
-  local function build_nodes(subtree, parent_path, indent_state)
-    local nodes = {}
-    local sorted_keys = {}
-
-    for key in pairs(subtree) do
-      sorted_keys[#sorted_keys + 1] = key
-    end
-    -- Sort: directories first, then files, alphabetically
-    table.sort(sorted_keys, function(a, b)
-      local a_is_dir = subtree[a]._is_dir
-      local b_is_dir = subtree[b]._is_dir
-      if a_is_dir ~= b_is_dir then
-        return a_is_dir
-      end
-      return a < b
-    end)
-
-    local total = #sorted_keys
-    for idx, key in ipairs(sorted_keys) do
-      local item = subtree[key]
-      local full_path = parent_path ~= "" and (parent_path .. "/" .. key) or key
-      local is_last = (idx == total)
-
-      -- Copy parent indent state and add current level
-      local node_indent_state = {}
-      for i, v in ipairs(indent_state) do
-        node_indent_state[i] = v
-      end
-      node_indent_state[#node_indent_state + 1] = is_last
-
-      if item._is_dir then
-        -- Directory node
-        local children = build_nodes(item._children, full_path, node_indent_state)
-        nodes[#nodes + 1] = Tree.Node({
-          id = "dir:" .. commit_hash .. ":" .. full_path,
-          text = key,
-          data = {
-            type = "directory",
-            name = key,
-            dir_path = full_path,
-            commit_hash = commit_hash,
-            git_root = git_root,
-            indent_state = node_indent_state,
-          },
-        }, children)
-      else
-        -- File node
-        local file = item._file
-        local icon, icon_color = M.get_file_icon(file.path)
-        local status_info = STATUS_SYMBOLS[file.status] or { symbol = file.status, color = "Normal" }
-
-        nodes[#nodes + 1] = Tree.Node({
-          id = "file:" .. commit_hash .. ":" .. file.path,
-          text = key,
-          data = {
-            type = "file",
-            path = file.path,
-            old_path = file.old_path,
-            status = file.status,
-            icon = icon,
-            icon_color = icon_color,
-            status_symbol = status_info.symbol,
-            status_color = status_info.color,
-            git_root = git_root,
-            commit_hash = commit_hash,
-            indent_state = node_indent_state,
-          },
-        })
-      end
-    end
-
-    return nodes
-  end
-
-  return build_nodes(dir_tree, "", {})
 end
 
 -- Prepare node for rendering (format display)
@@ -260,24 +146,7 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
     local is_selected = data.hash == selected_commit and (is_single_file_mode or not selected_file)
     local is_expanded = node:is_expanded()
 
-    -- Get selected background color once
-    local selected_bg = nil
-    if is_selected then
-      local sel_hl = vim.api.nvim_get_hl(0, { name = "CodeDiffExplorerSelected", link = false })
-      selected_bg = sel_hl.bg
-    end
-
-    local function get_hl(default)
-      if not is_selected then
-        return default or "Normal"
-      end
-      local base_hl_name = default or "Normal"
-      local combined_name = "CodeDiffHistorySel_" .. base_hl_name:gsub("[^%w]", "_")
-      local base_hl = vim.api.nvim_get_hl(0, { name = base_hl_name, link = false })
-      local fg = base_hl.fg
-      vim.api.nvim_set_hl(0, combined_name, { fg = fg, bg = selected_bg })
-      return combined_name
-    end
+    local get_hl = selected_highlight(is_selected)
 
     -- Expand/collapse indicator
     local expand_icon = is_expanded and " " or " "
@@ -345,37 +214,11 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
     -- [tree char] [status] [icon] [path/]filename
     local is_selected = data.commit_hash == selected_commit and data.path == selected_file
 
-    local selected_bg = nil
-    if is_selected then
-      local sel_hl = vim.api.nvim_get_hl(0, { name = "CodeDiffExplorerSelected", link = false })
-      selected_bg = sel_hl.bg
-    end
-
-    local function get_hl(default)
-      if not is_selected then
-        return default or "Normal"
-      end
-      local base_hl_name = default or "Normal"
-      local combined_name = "CodeDiffHistorySel_" .. base_hl_name:gsub("[^%w]", "_")
-      local base_hl = vim.api.nvim_get_hl(0, { name = base_hl_name, link = false })
-      local fg = base_hl.fg
-      vim.api.nvim_set_hl(0, combined_name, { fg = fg, bg = selected_bg })
-      return combined_name
-    end
+    local get_hl = selected_highlight(is_selected)
 
     -- Build tree line characters from indent_state (match explorer: 2-char per level)
-    local indent_str = ""
     local indent_state = data.indent_state or {}
-    for i, is_last in ipairs(indent_state) do
-      if i == #indent_state then
-        -- Current level - last item uses └, others use ├
-        indent_str = indent_str .. (is_last and "└ " or "├ ")
-      else
-        -- Parent levels - use │ if parent wasn't last, space otherwise
-        indent_str = indent_str .. (is_last and "  " or "│ ")
-      end
-    end
-    line:append(indent_str, get_hl("Comment"))
+    line:append(file_tree.indent(indent_state, true), get_hl("Comment"))
 
     -- Status symbol
     line:append(data.status_symbol .. " ", get_hl(data.status_color))
@@ -417,16 +260,8 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
     end
 
     -- Build tree line characters from indent_state (match explorer: 2-char per level)
-    local indent_str = ""
     local indent_state = data.indent_state or {}
-    for i, is_last in ipairs(indent_state) do
-      if i == #indent_state then
-        indent_str = indent_str .. (is_last and "└ " or "├ ")
-      else
-        indent_str = indent_str .. (is_last and "  " or "│ ")
-      end
-    end
-    line:append(indent_str, get_hl("Comment"))
+    line:append(file_tree.indent(indent_state, true), get_hl("Comment"))
 
     -- Folder icon
     local explorer_config = config.options.explorer or {}
