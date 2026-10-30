@@ -113,9 +113,7 @@ local function calculate_fillers(mapping, original_lines, _modified_lines, last_
 
     if orig_gap > 0 or mod_gap > 0 then
       table.insert(alignments, {
-        orig_start = last_orig_line,
         orig_end = orig_line_exclusive,
-        mod_start = last_mod_line,
         mod_end = mod_line_exclusive,
         orig_len = orig_gap,
         mod_len = mod_gap,
@@ -138,22 +136,7 @@ local function calculate_fillers(mapping, original_lines, _modified_lines, last_
       return
     end
 
-    local orig_range_len = orig_line_exclusive - last_orig_line
-    local mod_range_len = mod_line_exclusive - last_mod_line
-
-    if orig_range_len > 0 or mod_range_len > 0 then
-      table.insert(alignments, {
-        orig_start = last_orig_line,
-        orig_end = orig_line_exclusive,
-        mod_start = last_mod_line,
-        mod_end = mod_line_exclusive,
-        orig_len = orig_range_len,
-        mod_len = mod_range_len,
-      })
-    end
-
-    last_orig_line = orig_line_exclusive
-    last_mod_line = mod_line_exclusive
+    handle_gap_alignment(orig_line_exclusive, mod_line_exclusive)
   end
 
   for _, inner in ipairs(mapping.inner_changes) do

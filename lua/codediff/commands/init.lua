@@ -39,8 +39,6 @@ local function rev_candidates()
 end
 
 -- Completor: git refs, plus their `ref...` merge-base variants.
-
--- Completor: git refs, plus their `ref...` merge-base variants.
 local function complete_revisions(ctx)
   local lead = ctx.arg_lead or ""
   local base = lead:match("^(.+)%.%.%.$")
@@ -57,20 +55,14 @@ local function complete_revisions(ctx)
 end
 
 -- Completor: file paths.
-
--- Completor: file paths.
 local function complete_files(ctx)
   return vim.fn.getcompletion(ctx.arg_lead or "", "file")
 end
 
 -- Completor: directory paths (for --repo/-C).
-
--- Completor: directory paths (for --repo/-C).
 local function complete_dirs(ctx)
   return vim.fn.getcompletion(ctx.arg_lead or "", "dir")
 end
-
--- Build the :CodeDiff command tree.
 
 -- Build the :CodeDiff command tree.
 local function build_app()
@@ -281,8 +273,6 @@ local function get_app()
 end
 
 -- Tokens the completion engine sees: drop the command name and the partial lead.
-
--- Tokens the completion engine sees: drop the command name and the partial lead.
 local function completion_prior(cmd_line, arg_lead)
   local toks = vim.split(cmd_line, "%s+", { trimempty = true })
   table.remove(toks, 1)
@@ -291,8 +281,6 @@ local function completion_prior(cmd_line, arg_lead)
   end
   return toks
 end
-
--- Completion entry point shared by :CodeDiff and :VscodeDiff.
 
 -- Completion entry point shared by :CodeDiff and :VscodeDiff.
 function M.complete(arg_lead, cmd_line)

@@ -1,15 +1,5 @@
--- Decides which action keeps a key when two of them want the same one.
---
--- Remapping an action onto another action's default is the common way this
--- happens: `view.toggle_explorer = "<leader>e"` collides with the default
--- `view.focus_explorer`. Both get bound, the later one wins, and the user sees
--- their own mapping silently do nothing (#357).
---
--- The rule: a key the user chose beats a key that is merely a default. The
--- losing default is dropped rather than rebound elsewhere, so `<leader>e` runs
--- what the user asked for and `focus_explorer` is simply unbound. Deciding it
--- here, once, keeps every call site free of this logic -- a dropped binding
--- comes back as `false`, which they already treat as "not bound".
+-- A custom key wins over an action's default key (#357). Losing defaults
+-- resolve to false, so all consumers apply the same collision rules.
 
 local M = {}
 
@@ -18,19 +8,12 @@ local config = require("codediff.config")
 -- makes "the same key" mean the same thing in both places.
 local normalize = require("codediff.keymap.normalize")
 
---- Config keys that bind something despite not being in `defaults`: deprecated
---- spellings the code still honours (see the fallback in ui/view/keymaps.lua).
---- Anything else written under `keymaps` binds nothing -- a typo, or an option
---- from an older version -- and must not be able to take a key away from a
---- real action.
+-- Deprecated bindings still reserve slots. Unknown config keys do not.
 local STILL_HONOURED = {
   ["explorer.toggle_stage"] = true,
 }
 
---- Is this config entry a key binding at all?
---- `keymaps.view` also carries plain settings such as
---- `close_on_open_in_prev_tab`, which are not keys and must be left alone.
---- @return boolean
+-- Plain settings, such as close_on_open_in_prev_tab, are not key bindings.
 local function is_key_binding(scope, name)
   local shipped = config.defaults.keymaps and config.defaults.keymaps[scope]
   if type(shipped) == "table" and type(shipped[name]) == "string" then
@@ -39,26 +22,15 @@ local function is_key_binding(scope, name)
   return STILL_HONOURED[scope .. "." .. name] == true
 end
 
---- Did the user pick this key, or is it the one codediff ships?
----
---- Read off the config instead of being recorded during setup(): a value that
---- differs from its default can only have come from the user. That needs no
---- extra state to keep in step with `options` -- and `options` is reset
---- wholesale in many places, so a second source of truth would go stale.
----
---- The one thing it cannot see is a user who re-states a default verbatim.
---- Such a key collides with nothing new, so nothing depends on the difference.
---- @return boolean
+-- Read from current config: setup() can replace options wholesale.
+-- Restating a default verbatim cannot introduce a new collision.
 local function chosen_by_user(scope, name, value)
   local shipped = config.defaults.keymaps and config.defaults.keymaps[scope]
   local default = type(shipped) == "table" and shipped[name] or nil
   return value ~= default
 end
 
---- Spell a canonical key the way the user wrote it in their config, for use in
---- messages. keytrans is missing on older Neovim; this is only ever a
---- diagnostic string, so falling back to the raw bytes is good enough.
---- @return string
+-- keytrans is optional on older Neovim; raw bytes suffice for diagnostics.
 local function spell_key(key)
   if vim.fn.exists("*keytrans") == 1 then
     local ok, translated = pcall(vim.fn.keytrans, key)
@@ -69,9 +41,7 @@ local function spell_key(key)
   return key
 end
 
--- Clashes already reported. Keymap setup re-runs on every render and fans out
--- across buffers; the message is about the user's config, so it is worth
--- saying once per session rather than once per pass.
+-- Setup runs after each render; report each config warning only once.
 local already_warned = {}
 
 --- Tell the user that two keys they chose themselves want the same slot.
@@ -87,8 +57,7 @@ local function warn_user_keys_clash(key, action_names)
 
   vim.schedule(function()
     vim.notify(
-      ("[codediff] %s are mapped to the same key %s. Only one of them can work; give the others different keys.")
-        :format(table.concat(action_names, ", "), key),
+      ("[codediff] %s are mapped to the same key %s. Only one of them can work; give the others different keys."):format(table.concat(action_names, ", "), key),
       vim.log.levels.WARN
     )
   end)
@@ -108,17 +77,9 @@ local function warn_invalid(path, problem)
   end)
 end
 
---- The keys one configured entry asks for.
----
---- An action can answer to more than one key (`quit = { "q", "<Esc>" }`), so
---- every binding is read as a list; a plain string is the one-key case.
---- `false`, `nil`, `""` and `{}` all mean "not bound", the long-standing way
---- to switch a mapping off.
----
---- Anything else is invalid, and invalid is worth saying out loud: the value
---- would otherwise vanish and leave the action unreachable with no clue why.
---- This is the one place that knows which config entry a value came from.
---- @return string[]|nil keys nil when the entry binds nothing
+-- Normalize aliases and disabled bindings. Invalid values get a config-path
+-- warning instead of silently leaving an action unreachable.
+---@return string[]|nil
 local function keys_of(scope, name, value)
   if value == nil or value == false or value == "" then
     return nil
@@ -172,10 +133,8 @@ local function already_recorded(actions, scope, name)
   return false
 end
 
---- Every action that wants each key, across every scope.
---- Grouped across scopes on purpose: view mappings fan out to all session
---- buffers, so a view key really can land on top of an explorer or history one.
---- @return table<string, table[]> canonical key -> { scope, name, chosen }
+-- Group across scopes because view keys also reach panel buffers.
+---@return table<string, table[]> canonical key -> { scope, name, chosen }[]
 local function group_actions_by_key()
   local by_key = {}
 
@@ -223,10 +182,7 @@ local function find_defaults_that_lose()
         end
       end
 
-      -- Two hand-written keys on one slot carry no signal about which the user
-      -- meant, so neither is dropped and the existing order decides. Which one
-      -- that leaves working depends on session shape and buffer, so the message
-      -- does not pretend to know -- only that one of them will not work.
+      -- Custom/custom collisions keep setup order; neither has priority.
       if #user_picked > 1 then
         warn_user_keys_clash(
           spell_key(key),
@@ -241,12 +197,9 @@ local function find_defaults_that_lose()
   return losers
 end
 
---- The keymaps for one scope: every binding as the list of keys it asks for,
---- or `false` when it binds nothing -- which every caller already reads as
---- "not bound". Values are read and validated here, once, so nothing
---- downstream has to work out what a configured value meant.
---- @param scope string "view", "explorer", "conflict" or "history"
---- @return table name -> string[] of keys, or false
+--- Resolve bindings to lists or false; pass plain settings through unchanged.
+---@param scope string "view", "explorer", "conflict" or "history"
+---@return table
 function M.keymaps_for(scope)
   local entries = config.options.keymaps and config.options.keymaps[scope]
   if type(entries) ~= "table" then

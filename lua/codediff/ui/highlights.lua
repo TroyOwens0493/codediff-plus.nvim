@@ -222,47 +222,29 @@ function M.setup()
   -- @param fallbacks table List of fallback highlight groups to try
   -- @param default_hex string Default hex color if all fallbacks fail
   local function set_conflict_sign_hl(hl_name, user_value, fallbacks, default_hex)
-    -- Priority 0: User config
+    local style = { fg = default_hex, default = true }
     if user_value then
-      if user_value:match("^#%x%x%x%x%x%x$") then
-        -- Hex color
-        vim.api.nvim_set_hl(0, hl_name, { fg = user_value, default = true })
-      else
-        -- Highlight group name
-        vim.api.nvim_set_hl(0, hl_name, { link = user_value, default = true })
-      end
-      return
-    end
-
-    -- Try fallback chain
-    for _, fallback in ipairs(fallbacks) do
-      if hl_exists(fallback) then
-        vim.api.nvim_set_hl(0, hl_name, { link = fallback, default = true })
-        return
+      style = user_value:match("^#%x%x%x%x%x%x$") and { fg = user_value, default = true } or { link = user_value, default = true }
+    else
+      for _, fallback in ipairs(fallbacks) do
+        if hl_exists(fallback) then
+          style = { link = fallback, default = true }
+          break
+        end
       end
     end
-
-    -- Final fallback: hardcoded hex
-    vim.api.nvim_set_hl(0, hl_name, { fg = default_hex, default = true })
+    vim.api.nvim_set_hl(0, hl_name, style)
   end
 
-  local hl_config = config.options.highlights
-
-  -- Conflict sign in gutter (for merge view) - unresolved conflicts
-  -- Fallback chain: user config -> DiagnosticSignWarn -> hardcoded orange
-  set_conflict_sign_hl("CodeDiffConflictSign", hl_config.conflict_sign, { "DiagnosticSignWarn" }, "#f0883e")
-
-  -- Conflict sign in gutter (for merge view) - resolved conflicts (generic)
-  -- Fallback chain: user config -> Comment -> hardcoded gray
-  set_conflict_sign_hl("CodeDiffConflictSignResolved", hl_config.conflict_sign_resolved, { "Comment" }, "#6e7681")
-
-  -- Conflict sign for accepted side (green - this content was chosen)
-  -- Fallback chain: user config -> GitSignsAdd -> DiagnosticSignOk -> hardcoded green
-  set_conflict_sign_hl("CodeDiffConflictSignAccepted", hl_config.conflict_sign_accepted, { "GitSignsAdd", "DiagnosticSignOk" }, "#3fb950")
-
-  -- Conflict sign for rejected side (red - this content was not chosen)
-  -- Fallback chain: user config -> GitSignsDelete -> DiagnosticSignError -> hardcoded red
-  set_conflict_sign_hl("CodeDiffConflictSignRejected", hl_config.conflict_sign_rejected, { "GitSignsDelete", "DiagnosticSignError" }, "#f85149")
+  -- Sign color priority: user config, first available group, then the hex color.
+  for _, sign in ipairs({
+    { "CodeDiffConflictSign", "conflict_sign", { "DiagnosticSignWarn" }, "#f0883e" },
+    { "CodeDiffConflictSignResolved", "conflict_sign_resolved", { "Comment" }, "#6e7681" },
+    { "CodeDiffConflictSignAccepted", "conflict_sign_accepted", { "GitSignsAdd", "DiagnosticSignOk" }, "#3fb950" },
+    { "CodeDiffConflictSignRejected", "conflict_sign_rejected", { "GitSignsDelete", "DiagnosticSignError" }, "#f85149" },
+  }) do
+    set_conflict_sign_hl(sign[1], opts[sign[2]], sign[3], sign[4])
+  end
 
   -- History panel title (bold, slightly dimmed)
   vim.api.nvim_set_hl(0, "CodeDiffHistoryTitle", {

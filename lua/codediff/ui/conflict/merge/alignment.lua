@@ -256,73 +256,29 @@ function M.compute_mapping_alignments(changes1, changes2)
       return
     end
 
-    -- Calculate output ranges for each input using VSCode's extendInputRange approach
-    -- This ensures we cover the full base range even if the actual diffs only cover part of it
-
-    local output1_start, output1_end
-    local output2_start, output2_end
-
-    if #current_diffs[1] > 0 then
-      -- Join all changes for input1, then extend to cover full base range
-      local first = current_diffs[1][1]
-      local last = current_diffs[1][#current_diffs[1]]
-
-      -- Calculate the joined mapping's input/output ranges
-      local joined_input_start = first.original.start_line
-      local joined_input_end = last.original.end_line
-      local joined_output_start = first.modified.start_line
-      local joined_output_end = last.modified.end_line
-
-      -- Extend to cover current_base_range (VSCode's extendInputRange)
-      local start_delta = current_base_range.start_line - joined_input_start
-      local end_delta = current_base_range.end_line - joined_input_end
-
-      output1_start = joined_output_start + start_delta
-      output1_end = joined_output_end + end_delta
-    else
-      -- No changes for input1, use base range with delta
-      output1_start = current_base_range.start_line + delta_from_base[1]
-      output1_end = current_base_range.end_line + delta_from_base[1]
-    end
-
-    if #current_diffs[2] > 0 then
-      -- Join all changes for input2, then extend to cover full base range
-      local first = current_diffs[2][1]
-      local last = current_diffs[2][#current_diffs[2]]
-
-      local joined_input_start = first.original.start_line
-      local joined_input_end = last.original.end_line
-      local joined_output_start = first.modified.start_line
-      local joined_output_end = last.modified.end_line
-
-      -- Extend to cover current_base_range
-      local start_delta = current_base_range.start_line - joined_input_start
-      local end_delta = current_base_range.end_line - joined_input_end
-
-      output2_start = joined_output_start + start_delta
-      output2_end = joined_output_end + end_delta
-    else
-      output2_start = current_base_range.start_line + delta_from_base[2]
-      output2_end = current_base_range.end_line + delta_from_base[2]
-    end
-
-    -- Collect inner diffs
-    local inner1, inner2 = {}, {}
-    for _, c in ipairs(current_diffs[1]) do
-      for _, inner in ipairs(c.inner_changes or {}) do
-        table.insert(inner1, inner)
+    -- Extend each side's joined mapping to cover the complete base range.
+    local function extend_input(side)
+      local changes = current_diffs[side]
+      local start_line = current_base_range.start_line + delta_from_base[side]
+      local end_line = current_base_range.end_line + delta_from_base[side]
+      if #changes > 0 then
+        local first, last = changes[1], changes[#changes]
+        start_line = first.modified.start_line + current_base_range.start_line - first.original.start_line
+        end_line = last.modified.end_line + current_base_range.end_line - last.original.end_line
       end
-    end
-    for _, c in ipairs(current_diffs[2]) do
-      for _, inner in ipairs(c.inner_changes or {}) do
-        table.insert(inner2, inner)
+      local inner = {}
+      for _, change in ipairs(changes) do
+        vim.list_extend(inner, change.inner_changes or {})
       end
+      return { start_line = start_line, end_line = end_line }, inner
     end
+    local output1, inner1 = extend_input(1)
+    local output2, inner2 = extend_input(2)
 
     table.insert(alignments, {
       base_range = current_base_range,
-      output1_range = { start_line = output1_start, end_line = output1_end },
-      output2_range = { start_line = output2_start, end_line = output2_end },
+      output1_range = output1,
+      output2_range = output2,
       inner1 = inner1,
       inner2 = inner2,
       -- True iff this side actually contributed at least one diff to this group.

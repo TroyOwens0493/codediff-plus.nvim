@@ -51,34 +51,18 @@ function Arg:short(name)
   return self
 end
 
-function Arg:help(text)
-  self._help = text
-  return self
+-- Value setters preserve nil; boolean setters default to true.
+for _, name in ipairs({ "help", "value_name", "action", "value_parser", "default", "completor" }) do
+  Arg[name] = function(self, value)
+    self["_" .. name] = value
+    return self
+  end
 end
-
-function Arg:value_name(name)
-  self._value_name = name
-  return self
-end
-
-function Arg:action(a)
-  self._action = a
-  return self
-end
-
-function Arg:value_parser(vp)
-  self._value_parser = vp
-  return self
-end
-
-function Arg:default(v)
-  self._default = v
-  return self
-end
-
-function Arg:required(v)
-  self._required = (v ~= false)
-  return self
+for _, name in ipairs({ "required", "global" }) do
+  Arg[name] = function(self, value)
+    self["_" .. name] = value ~= false
+    return self
+  end
 end
 
 -- Shortcut: constrain to a fixed set (sets an enum value_parser).
@@ -87,38 +71,14 @@ function Arg:choices(list)
   return self
 end
 
-function Arg:conflicts_with(other)
-  if type(other) == "table" then
-    for _, o in ipairs(other) do
-      table.insert(self._conflicts, o)
+-- Both constraints accept one argument ID or a list of IDs.
+for name, field in pairs({ conflicts_with = "_conflicts", requires = "_requires" }) do
+  Arg[name] = function(self, other)
+    for _, id in ipairs(type(other) == "table" and other or { other }) do
+      table.insert(self[field], id)
     end
-  else
-    table.insert(self._conflicts, other)
+    return self
   end
-  return self
-end
-
-function Arg:requires(other)
-  if type(other) == "table" then
-    for _, o in ipairs(other) do
-      table.insert(self._requires, o)
-    end
-  else
-    table.insert(self._requires, other)
-  end
-  return self
-end
-
--- Dynamic value completion hook: fn(ctx) -> { candidate, ... }.
-function Arg:completor(fn)
-  self._completor = fn
-  return self
-end
-
--- Persistent/global: recognized by this command and all descendants.
-function Arg:global(v)
-  self._global = (v ~= false)
-  return self
 end
 
 function Arg:is_positional()

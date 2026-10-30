@@ -76,9 +76,25 @@ local function build_sections(keymaps, is_bound, shape)
     { km.show_help, "Toggle this help" },
   })
 
+  local function panel_section(title, keys, entries)
+    for _, fold in ipairs({
+      { "fold_open", "Open fold" },
+      { "fold_open_recursive", "Open fold recursively" },
+      { "fold_close", "Close fold" },
+      { "fold_close_recursive", "Close fold recursively" },
+      { "fold_toggle", "Toggle fold" },
+      { "fold_toggle_recursive", "Toggle fold recursively" },
+      { "fold_open_all", "Open all folds" },
+      { "fold_close_all", "Close all folds" },
+    }) do
+      entries[#entries + 1] = { keys[fold[1]], fold[2] }
+    end
+    add(title, entries)
+  end
+
   if shape.explorer then
     local ekm = keymaps.explorer
-    add("EXPLORER", {
+    panel_section("EXPLORER", ekm, {
       { ekm.select, "Select / toggle expand" },
       { MOUSE_SELECT, "Select file (double click)" },
       { "j", "Move down / auto-open file" },
@@ -93,32 +109,16 @@ local function build_sections(keymaps, is_bound, shape)
       { ekm.restore, "Discard changes to file" },
       { ekm.toggle_changes, "Toggle Changes visibility" },
       { ekm.toggle_staged, "Toggle Staged visibility" },
-      { ekm.fold_open, "Open fold" },
-      { ekm.fold_open_recursive, "Open fold recursively" },
-      { ekm.fold_close, "Close fold" },
-      { ekm.fold_close_recursive, "Close fold recursively" },
-      { ekm.fold_toggle, "Toggle fold" },
-      { ekm.fold_toggle_recursive, "Toggle fold recursively" },
-      { ekm.fold_open_all, "Open all folds" },
-      { ekm.fold_close_all, "Close all folds" },
     })
   end
 
   if shape.history then
     local hkm = keymaps.history
-    add("HISTORY", {
+    panel_section("HISTORY", hkm, {
       { hkm.select, "Select commit/file or toggle" },
       { MOUSE_SELECT, "Select commit/file (double click)" },
       { hkm.toggle_view_mode, "Toggle list/tree view" },
       { hkm.refresh, "Refresh history" },
-      { hkm.fold_open, "Open fold" },
-      { hkm.fold_open_recursive, "Open fold recursively" },
-      { hkm.fold_close, "Close fold" },
-      { hkm.fold_close_recursive, "Close fold recursively" },
-      { hkm.fold_toggle, "Toggle fold" },
-      { hkm.fold_toggle_recursive, "Toggle fold recursively" },
-      { hkm.fold_open_all, "Open all folds" },
-      { hkm.fold_close_all, "Close all folds" },
     })
   end
 
@@ -194,18 +194,6 @@ local function render_group(sections, col_width)
   return lines, hls
 end
 
--- Split sections into two column groups (heuristic: first section left, rest right).
--- In practice we ever have at most 2 sections (VIEW + one of EXPLORER/HISTORY/CONFLICT),
--- so this maps to VIEW on the left and the mode-specific section on the right.
-local function split_two_col(sections)
-  local left = { sections[1] }
-  local right = {}
-  for i = 2, #sections do
-    table.insert(right, sections[i])
-  end
-  return left, right
-end
-
 -- Compose two rendered column groups into a single (lines, hls, total_width) tuple.
 -- Both column widths are per-group; horizontal padding on the left column and
 -- byte-offset shifting on the right column keep highlights aligned.
@@ -279,7 +267,7 @@ function M.toggle(tabpage)
   local lines, hls, win_width
   local max_editor_width = math.max(vim.o.columns - 4, 40)
   if #sections >= 2 then
-    local left, right = split_two_col(sections)
+    local left, right = { sections[1] }, vim.list_slice(sections, 2)
     local two_lines, two_hls, two_w = compose_two_col(left, right)
     if two_w <= max_editor_width then
       lines, hls, win_width = two_lines, two_hls, two_w

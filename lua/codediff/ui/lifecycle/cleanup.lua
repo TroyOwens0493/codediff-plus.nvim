@@ -40,47 +40,33 @@ local function cleanup_diff(tabpage)
   require("codediff.ui.conflict").teardown_gutter(tabpage)
 
   -- Another tab may still own the same working or revision buffer.
-  if not accessors.is_buffer_shared(diff.original_bufnr, tabpage) then
-    state.clear_buffer_highlights(diff.original_bufnr)
-    state.restore_buffer_state(diff.original_bufnr, diff.original_state)
-  end
-  if not accessors.is_buffer_shared(diff.modified_bufnr, tabpage) then
-    state.clear_buffer_highlights(diff.modified_bufnr)
-    state.restore_buffer_state(diff.modified_bufnr, diff.modified_state)
+  for _, side in ipairs({ "original", "modified" }) do
+    local buf = diff[side .. "_bufnr"]
+    if not accessors.is_buffer_shared(buf, tabpage) then
+      state.clear_buffer_highlights(buf)
+      state.restore_buffer_state(buf, diff[side .. "_state"])
+    end
   end
 
   -- Hand every mapped key back to whatever owned it before codediff
   keymaps.dispose_keymaps(tabpage)
 
-  -- Delete virtual buffers if they're still valid
-  if vim.api.nvim_buf_is_valid(diff.original_bufnr) then
-    if is_virtual_revision(diff.original_revision) and not accessors.is_buffer_shared(diff.original_bufnr, tabpage) then
-      pcall(vim.api.nvim_buf_delete, diff.original_bufnr, { force = true })
+  for _, side in ipairs({ "original", "modified" }) do
+    local buf = diff[side .. "_bufnr"]
+    if vim.api.nvim_buf_is_valid(buf) and is_virtual_revision(diff[side .. "_revision"]) and not accessors.is_buffer_shared(buf, tabpage) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
     end
   end
 
-  if vim.api.nvim_buf_is_valid(diff.modified_bufnr) then
-    if is_virtual_revision(diff.modified_revision) and not accessors.is_buffer_shared(diff.modified_bufnr, tabpage) then
-      pcall(vim.api.nvim_buf_delete, diff.modified_bufnr, { force = true })
+  for _, side in ipairs({ "original", "modified", "result" }) do
+    local win = diff[side .. "_win"]
+    if win and vim.api.nvim_win_is_valid(win) then
+      if side ~= "result" then
+        welcome_window.apply_normal(win)
+      end
+      vim.wo[win].scrollbind = false
+      vim.w[win].codediff_restore = nil
     end
-  end
-
-  -- Clear window variables if windows still exist
-  if diff.original_win and vim.api.nvim_win_is_valid(diff.original_win) then
-    welcome_window.apply_normal(diff.original_win)
-    vim.wo[diff.original_win].scrollbind = false
-    vim.w[diff.original_win].codediff_restore = nil
-  end
-  if diff.modified_win and vim.api.nvim_win_is_valid(diff.modified_win) then
-    welcome_window.apply_normal(diff.modified_win)
-    vim.wo[diff.modified_win].scrollbind = false
-    vim.w[diff.modified_win].codediff_restore = nil
-  end
-
-  -- Clear result window variable if exists (conflict mode)
-  if diff.result_win and vim.api.nvim_win_is_valid(diff.result_win) then
-    vim.wo[diff.result_win].scrollbind = false
-    vim.w[diff.result_win].codediff_restore = nil
   end
 
   -- Clear conflict file tracking (buffers remain, just not tracked)
@@ -114,9 +100,9 @@ local function count_diff_windows()
   return count
 end
 
--- Check if we should trigger cleanup for a window
-local function should_cleanup(winid)
-  return vim.w[winid].codediff_restore and vim.api.nvim_win_is_valid(winid)
+local function has_too_few_windows(diff)
+  local single = diff.single_pane == true or diff.layout == "inline"
+  return count_diff_windows() <= (single and 0 or 1)
 end
 
 -- Setup autocmds for automatic cleanup
@@ -154,11 +140,7 @@ function M.setup_autocmds()
         local active_diffs = session.get_active_diffs()
         for tabpage, diff in pairs(active_diffs) do
           if diff.original_win == closed_win or diff.modified_win == closed_win then
-            -- single_pane/inline mode: we expect only 1 diff window
-            local is_single_window = diff.single_pane == true or diff.layout == "inline"
-            local diff_win_count = count_diff_windows()
-            local threshold = is_single_window and 0 or 1
-            if diff_win_count <= threshold then
+            if has_too_few_windows(diff) then
               cleanup_diff(tabpage)
             end
             break
@@ -207,10 +189,7 @@ function M.setup_autocmds()
         end
         local diff = session.get_active_diffs()[tabpage]
         if diff then
-          local diff_win_count = count_diff_windows()
-          local is_single_window = diff.single_pane == true or diff.layout == "inline"
-          local threshold = is_single_window and 0 or 1
-          if diff_win_count <= threshold then
+          if has_too_few_windows(diff) then
             cleanup_diff(tabpage)
           end
         end
@@ -273,16 +252,10 @@ local function cleanup_for_quit(tabpage)
     if panel_view and panel_view.bufnr then
       bufs_to_delete[panel_view.bufnr] = true
     end
-    -- Diff pane buffers (virtual AND scratch placeholders)
-    if diff.original_bufnr then
-      bufs_to_delete[diff.original_bufnr] = true
-    end
-    if diff.modified_bufnr then
-      bufs_to_delete[diff.modified_bufnr] = true
-    end
-    -- Conflict result buffer
-    if diff.result_bufnr then
-      bufs_to_delete[diff.result_bufnr] = true
+    for _, field in ipairs({ "original_bufnr", "modified_bufnr", "result_bufnr" }) do
+      if diff[field] then
+        bufs_to_delete[diff[field]] = true
+      end
     end
   end
 

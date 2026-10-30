@@ -139,46 +139,21 @@ function M.setup(explorer)
     end, "Refresh explorer")
   end
 
-  -- Toggle view mode (i key) - switch between 'list' and 'tree'
-  if explorer_keymaps.toggle_view_mode then
-    panel_map(explorer_keymaps.toggle_view_mode, function()
-      actions_module.toggle_view_mode(explorer)
-    end, "Toggle list/tree view")
-  end
-
-  -- Stage all files (S key)
-  if explorer_keymaps.stage_all then
-    panel_map(explorer_keymaps.stage_all, function()
-      actions_module.stage_all(explorer)
-    end, "Stage all files")
-  end
-
-  -- Unstage all files (U key)
-  if explorer_keymaps.unstage_all then
-    panel_map(explorer_keymaps.unstage_all, function()
-      actions_module.unstage_all(explorer)
-    end, "Unstage all files")
-  end
-
-  -- Restore/discard changes (X key)
-  if explorer_keymaps.restore then
-    panel_map(explorer_keymaps.restore, function()
-      actions_module.restore_entry(explorer, tree)
-    end, "Restore/discard changes")
-  end
-
-  -- Toggle Changes (unstaged) group visibility
-  if explorer_keymaps.toggle_changes then
-    panel_map(explorer_keymaps.toggle_changes, function()
-      actions_module.toggle_group(explorer, "unstaged")
-    end, "Toggle Changes visibility")
-  end
-
-  -- Toggle Staged Changes group visibility
-  if explorer_keymaps.toggle_staged then
-    panel_map(explorer_keymaps.toggle_staged, function()
-      actions_module.toggle_group(explorer, "staged")
-    end, "Toggle Staged Changes visibility")
+  -- The simple actions share binding rules; selection and hover stay explicit.
+  local entries = {
+    { "toggle_view_mode", actions_module.toggle_view_mode, "Toggle list/tree view" },
+    { "stage_all", actions_module.stage_all, "Stage all files" },
+    { "unstage_all", actions_module.unstage_all, "Unstage all files" },
+    { "restore", actions_module.restore_entry, "Restore/discard changes", tree },
+    { "toggle_changes", actions_module.toggle_group, "Toggle Changes visibility", "unstaged" },
+    { "toggle_staged", actions_module.toggle_group, "Toggle Staged Changes visibility", "staged" },
+  }
+  for _, entry in ipairs(entries) do
+    if explorer_keymaps[entry[1]] then
+      panel_map(explorer_keymaps[entry[1]], function()
+        entry[2](explorer, entry[4])
+      end, entry[3])
+    end
   end
 
   -- Fold keymaps (Vim-style: zo/zO/zc/zC/za/zA/zR/zM)

@@ -134,6 +134,9 @@ end
 function M.prepare_node(node, max_width, selected_commit, selected_file, is_single_file_mode)
   local line = Line()
   local data = node.data or {}
+  local is_selected = (data.type == "commit" and data.hash == selected_commit and (is_single_file_mode or not selected_file))
+    or (data.type == "file" and data.commit_hash == selected_commit and data.path == selected_file)
+  local get_hl = selected_highlight(is_selected)
 
   if data.type == "title" then
     -- Title node - styled header
@@ -143,14 +146,7 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
     -- [fold icon] N file(s) | +adds -dels | hash subject author, date
     -- In single-file mode, highlight commit when hash matches (no file nodes exist)
     -- In multi-file mode, highlight commit only when no file is selected
-    local is_selected = data.hash == selected_commit and (is_single_file_mode or not selected_file)
-    local is_expanded = node:is_expanded()
-
-    local get_hl = selected_highlight(is_selected)
-
-    -- Expand/collapse indicator
-    local expand_icon = is_expanded and " " or " "
-    line:append(expand_icon, get_hl("NonText"))
+    line:append(" ", get_hl("NonText"))
 
     -- File count (padded to align) - skip in single file mode (when file_path is set)
     if not data.file_path then
@@ -201,21 +197,9 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
 
     -- Author, date at end (dimmed); date rendering honors history.date_format (#340)
     line:append(" " .. data.author .. ", " .. format_commit_date(data.date, data.date_relative), get_hl("Comment"))
-
-    -- Pad with spaces to fill full line width when selected
-    if is_selected and max_width then
-      local current_len = #line:content()
-      if current_len < max_width then
-        line:append(string.rep(" ", max_width - current_len), get_hl("Normal"))
-      end
-    end
   elseif data.type == "file" then
     -- File node format (diffview style):
     -- [tree char] [status] [icon] [path/]filename
-    local is_selected = data.commit_hash == selected_commit and data.path == selected_file
-
-    local get_hl = selected_highlight(is_selected)
-
     -- Build tree line characters from indent_state (match explorer: 2-char per level)
     local indent_state = data.indent_state or {}
     line:append(file_tree.indent(indent_state, true), get_hl("Comment"))
@@ -244,21 +228,9 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
       end
       line:append(filename, get_hl("Normal"))
     end
-
-    -- Pad with spaces to fill full line width when selected
-    if is_selected and max_width then
-      local current_len = #line:content()
-      if current_len < max_width then
-        line:append(string.rep(" ", max_width - current_len), get_hl("Normal"))
-      end
-    end
   elseif data.type == "directory" then
     -- Directory node format (tree mode only):
     -- [tree chars] [folder icon] [name]
-    local function get_hl(default)
-      return default or "Normal"
-    end
-
     -- Build tree line characters from indent_state (match explorer: 2-char per level)
     local indent_state = data.indent_state or {}
     line:append(file_tree.indent(indent_state, true), get_hl("Comment"))
@@ -274,6 +246,10 @@ function M.prepare_node(node, max_width, selected_commit, selected_file, is_sing
     line:append(data.name, get_hl("Directory"))
   end
 
+  local padding = is_selected and max_width and max_width - #line:content() or 0
+  if padding > 0 then
+    line:append(string.rep(" ", padding), get_hl("Normal"))
+  end
   return line
 end
 

@@ -1,17 +1,6 @@
--- Per-session keymap registry.
---
--- Owns every mapping a single codediff session installs, so teardown is
--- symmetric with setup. The registry holds no mapping state itself: it records
--- which slots it claimed and delegates arbitration to codediff.keymap.slots.
---
--- Buffer ownership matters for suspend/resume:
---   * borrowed buffers (real files shown in the diff panes) must release their
---     mappings when the user leaves the tab, or codediff's keys would appear
---     on that file everywhere it is opened;
---   * owned buffers (explorer/history panels and other codediff scratch
---     buffers) cannot leak anywhere, so their mappings stay installed until
---     the buffer goes away. Suspending them caused a past regression where
---     panel keys vanished after a tab switch.
+-- Each session records its claims; slots arbitrate ownership and restore maps.
+-- Borrowed real-file buffers suspend on TabLeave. Owned panel buffers remain
+-- mapped because they cannot leak into another tab.
 
 local M = {}
 
@@ -40,23 +29,23 @@ function M.new(name)
   }, Registry)
 end
 
---- Begin a setup pass for `scope`.
----
---- Keymap setup is re-run whenever a session changes shape (layout toggle,
---- entering or leaving conflict mode, reconfiguration). Without a scope the
---- pass could only add claims, so mappings from the previous shape survived —
---- `gm` after switching to inline, conflict mappings after leaving a merge.
---- Claims made between begin_scope and end_scope are tagged; end_scope
---- releases anything in that scope the pass did not re-claim.
---- @param scope string
+-- Remove matching entries and release their claims through the same path.
+local function release_entries(self, matches)
+  for key, entry in pairs(self.entries) do
+    if matches(entry) then
+      slots.release(self, entry.bufnr, entry.mode, entry.lhs, entry.scope)
+      self.entries[key] = nil
+    end
+  end
+end
+
+--- Begin a setup pass. end_scope retires claims this pass does not renew.
+---@param scope string
 function Registry:begin_scope(scope)
   if self.disposed then
     return
   end
-  -- A pass that aborted before its end_scope would otherwise leave its name on
-  -- the stack forever, so drop any stale entry for this scope first. Claims
-  -- made in that window are still attributed to it and will be retired here;
-  -- that is acceptable because an aborted setup pass is already a failed state.
+  -- Discard an unfinished pass with the same name before starting again.
   for i = #self.scope_stack, 1, -1 do
     if self.scope_stack[i] == scope then
       table.remove(self.scope_stack, i)
@@ -72,10 +61,8 @@ local function current_scope(self)
 end
 
 --- Finish a setup pass, releasing claims it did not renew.
----
---- Unwinds to `scope` when given, so a pass that aborted before its own
---- end_scope cannot leave the stack dirty and silently mis-tag later claims.
---- @param scope string|nil Defaults to the innermost open pass
+--- A named scope also unwinds unfinished inner passes.
+---@param scope string|nil Defaults to the innermost open pass
 function Registry:end_scope(scope)
   if self.disposed then
     return
@@ -102,12 +89,9 @@ function Registry:end_scope(scope)
     end
   end
   local generation = self.scope_gen[scope]
-  for key, entry in pairs(self.entries) do
-    if entry.scope == scope and entry.generation ~= generation then
-      slots.release(self, entry.bufnr, entry.mode, entry.lhs, entry.scope)
-      self.entries[key] = nil
-    end
-  end
+  release_entries(self, function(entry)
+    return entry.scope == scope and entry.generation ~= generation
+  end)
 end
 
 --- Release every claim belonging to `scope`.
@@ -117,12 +101,9 @@ function Registry:release_scope(scope)
   if self.disposed then
     return
   end
-  for key, entry in pairs(self.entries) do
-    if entry.scope == scope then
-      slots.release(self, entry.bufnr, entry.mode, entry.lhs, entry.scope)
-      self.entries[key] = nil
-    end
-  end
+  release_entries(self, function(entry)
+    return entry.scope == scope
+  end)
 end
 
 --- Install a mapping owned by this registry.
@@ -149,10 +130,7 @@ function Registry:claim(bufnr, modes, lhs, rhs, opts, meta)
   local claimed = false
 
   for _, resolved in ipairs(normalize.key_list(lhs)) do
-    -- `canonical` identifies the slot; `resolved` is the spelling the mapping
-    -- APIs accept. Passing the canonical bytes to vim.keymap.set would encode
-    -- keys like <2-LeftMouse> and <Down> a second time, leaving a mapping the
-    -- real key press can never reach.
+    -- Canonical bytes identify a slot; the API takes the configured spelling.
     local canonical = normalize.canonical(resolved)
     for _, mode in ipairs(canonical and normalize.modes(modes) or {}) do
       local scope = current_scope(self)
@@ -224,12 +202,9 @@ function Registry:release(bufnr, modes, lhs)
     for _, mode in ipairs(canonical and normalize.modes(modes) or {}) do
       -- Release every scope's claim on this key, since the caller names a
       -- mapping rather than a particular setup pass.
-      for key, entry in pairs(self.entries) do
-        if entry.bufnr == bufnr and entry.mode == mode and entry.lhs == canonical then
-          slots.release(self, bufnr, mode, canonical, entry.scope)
-          self.entries[key] = nil
-        end
-      end
+      release_entries(self, function(entry)
+        return entry.bufnr == bufnr and entry.mode == mode and entry.lhs == canonical
+      end)
     end
   end
 end
@@ -245,60 +220,45 @@ function Registry:forget_buffer(bufnr)
   end
 end
 
---- Release every mapping this registry installed on a buffer.
---- Used when a diff pane swaps to a different file, so the buffer that leaves
---- the session gets its original mappings back immediately.
---- @param bufnr number
+--- Restore mappings when a file leaves the session.
+---@param bufnr number
 function Registry:detach_buffer(bufnr)
   if not bufnr then
     return
   end
-  for key, entry in pairs(self.entries) do
-    if entry.bufnr == bufnr then
-      slots.release(self, entry.bufnr, entry.mode, entry.lhs, entry.scope)
-      self.entries[key] = nil
-    end
-  end
+  release_entries(self, function(entry)
+    return entry.bufnr == bufnr
+  end)
 end
 
 --- Release mappings on every buffer except those listed.
 --- @param keep table<number, boolean> Set of buffer numbers to retain
 function Registry:detach_buffers_except(keep)
-  local seen = {}
-  for _, entry in pairs(self.entries) do
-    if not keep[entry.bufnr] then
-      seen[entry.bufnr] = true
-    end
+  release_entries(self, function(entry)
+    return not keep[entry.bufnr]
+  end)
+end
+
+local function set_suspended(self, suspended)
+  if self.disposed or self.suspended == suspended then
+    return
   end
-  for bufnr in pairs(seen) do
-    self:detach_buffer(bufnr)
+  self.suspended = suspended
+  for _, entry in pairs(self.entries) do
+    if entry.suspendable then
+      slots.set_active(self, entry.bufnr, entry.mode, entry.lhs, not suspended, entry.scope)
+    end
   end
 end
 
 --- Uninstall suspendable mappings, keeping the claims registered.
 function Registry:suspend()
-  if self.disposed or self.suspended then
-    return
-  end
-  self.suspended = true
-  for _, entry in pairs(self.entries) do
-    if entry.suspendable then
-      slots.set_active(self, entry.bufnr, entry.mode, entry.lhs, false, entry.scope)
-    end
-  end
+  set_suspended(self, true)
 end
 
 --- Reinstall previously suspended mappings.
 function Registry:resume()
-  if self.disposed or not self.suspended then
-    return
-  end
-  self.suspended = false
-  for _, entry in pairs(self.entries) do
-    if entry.suspendable then
-      slots.set_active(self, entry.bufnr, entry.mode, entry.lhs, true, entry.scope)
-    end
-  end
+  set_suspended(self, false)
 end
 
 --- Release everything. Idempotent, so repeated cleanup is harmless.
@@ -307,10 +267,9 @@ function Registry:dispose()
     return
   end
   self.disposed = true
-  for key, entry in pairs(self.entries) do
-    slots.release(self, entry.bufnr, entry.mode, entry.lhs, entry.scope)
-    self.entries[key] = nil
-  end
+  release_entries(self, function()
+    return true
+  end)
 end
 
 --- Number of mappings currently registered. Test/diagnostic helper.

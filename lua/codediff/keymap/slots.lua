@@ -1,20 +1,7 @@
--- Global mapping-slot arbiter.
---
--- A "slot" is one concrete Neovim mapping: (bufnr, mode, canonical lhs).
--- Every slot remembers the buffer-local mapping that existed before codediff
--- first touched it, and the set of claims currently competing for it.
---
--- Invariants:
---   * The pre-existing mapping is snapshotted exactly once, on first claim.
---   * It is handed back when the last claim is released.
---   * If no buffer-local mapping existed, codediff's mapping is deleted so the
---     global/default binding becomes visible again.
---   * If another plugin replaces codediff's mapping while it is installed, the
---     foreign mapping wins: codediff neither reinstalls nor restores over it.
---
--- Multiple sessions may claim the same slot (the same real file can be open in
--- two diff tabs). Claims are reference-counted so teardown of one session
--- cannot destroy another session's mapping or the user's original.
+-- A slot is (buffer, mode, canonical lhs), shared by all session claims.
+-- Snapshot the original local mapping on the first claim and restore it when
+-- the last claim leaves. Without a local mapping, reveal the global fallback.
+-- If another plugin replaces our mapping, leave its replacement untouched.
 
 local M = {}
 
@@ -89,9 +76,7 @@ local function drop_slot(slot)
   end
 end
 
--- Mapping fields that decide whether two mappings are "the same mapping".
--- Options matter: re-mapping the same RHS with different `silent` or `nowait`
--- is a different mapping and must count as foreign.
+-- Changed options count as a foreign replacement, even with the same RHS.
 local COMPARED_FIELDS = { "expr", "noremap", "script", "silent", "nowait", "desc", "replace_keycodes" }
 
 --- Compare two mapping descriptions for identity, including options.
@@ -131,9 +116,7 @@ local function install(slot, claim)
   local ok = pcall(vim.keymap.set, slot.mode, slot.lhs, rhs, opts)
   if ok then
     slot.applied = claim
-    -- Remember the mapping exactly as Neovim recorded it. Ownership is decided
-    -- against this snapshot: another plugin may reuse the same RHS, or even the
-    -- same callback, while changing options, and that is still its mapping.
+    -- Save Neovim's full mapping so option-only replacements are detected.
     slot.applied_map = read_current(slot.bufnr, slot.mode, slot.lhs)
   else
     slot.applied = nil
@@ -141,9 +124,7 @@ local function install(slot, claim)
   end
 end
 
---- True when the mapping currently installed is the one this slot applied.
---- Compares the whole mapping, not just its right-hand side: a plugin that
---- re-maps the same RHS with different options has replaced ours.
+--- Compare the full installed mapping with our snapshot.
 local function installed_is_ours(slot)
   if not slot.applied or not slot.applied_map then
     return false
@@ -155,13 +136,8 @@ local function installed_is_ours(slot)
   return same_map(current, slot.applied_map)
 end
 
---- True when codediff may take this slot.
----
---- Only two states are ours to take: nothing buffer-local is installed and
---- there was nothing to begin with, or what is installed is exactly the
---- snapshot we previously handed back. Anything else — including the snapshot
---- having been deleted by someone else while we were suspended — means another
---- party now owns the key.
+-- Resume only over the restored snapshot, or an absent mapping if none was
+-- saved. A deleted snapshot means another party has taken ownership.
 local function slot_is_free_for_us(slot)
   local current = read_current(slot.bufnr, slot.mode, slot.lhs)
   if not is_buffer_local(current) then
@@ -202,9 +178,7 @@ local function winner(slot)
   return best
 end
 
---- Bring the real Neovim mapping in line with the slot's claims.
---- The slot survives as long as any claim is registered, even when every claim
---- is suspended, because it holds the snapshot needed to restore on resume.
+-- Keep suspended claims registered: resume still needs the original snapshot.
 local function reconcile(slot)
   if not vim.api.nvim_buf_is_valid(slot.bufnr) then
     drop_slot(slot)
@@ -249,11 +223,8 @@ local function reconcile(slot)
   end
 end
 
---- Claims are identified by owner *and* scope: one registry can hold several
---- claims on the same key from different setup passes (a custom
---- `view.toggle_compact = "zo"` alongside compact's own `zo` wrapper). Keying
---- on the owner alone would make the later pass overwrite the earlier one, and
---- releasing it would leave the key unmapped instead of revealing the first.
+-- One registry can claim a key in several scopes (e.g. view and compact).
+-- Releasing one scope must reveal the other claim.
 local function find_claim(slot, owner, scope)
   for index, claim in ipairs(slot.claims) do
     if claim.owner == owner and claim.scope == scope then
@@ -263,13 +234,8 @@ local function find_claim(slot, owner, scope)
   return nil
 end
 
---- Claim a slot for `owner`, snapshotting any pre-existing buffer-local map.
---- Re-claiming with the same owner replaces that owner's previous claim, which
---- is what happens when a session re-runs its keymap setup after a re-render.
----
---- `key` identifies the slot; `lhs` is what Neovim is asked to map. They differ
---- for keys such as `<2-LeftMouse>` and `<Down>`, whose canonical form contains
---- K_SPECIAL bytes that the mapping APIs would encode a second time.
+--- Claim a slot, replacing an earlier claim with the same owner and scope.
+--- Key is canonical identity; lhs is the API-safe spelling.
 --- @param owner table
 --- @param bufnr number
 --- @param mode string
@@ -284,11 +250,7 @@ function M.claim(owner, bufnr, mode, key, lhs, rhs, opts, priority, scope)
     return false
   end
 
-  -- Freeze the spelling now. `lhs` may contain <leader>, which resolves
-  -- against mapleader at this instant; if the user changes mapleader later,
-  -- re-reading the configured string would address a different key and we
-  -- would fail to find, restore or delete what we installed. keytrans gives a
-  -- stable, API-safe rendering of the canonical bytes.
+  -- Freeze <leader> now so later config changes cannot redirect teardown.
   local frozen = lhs
   if vim.fn.exists("*keytrans") == 1 then
     local ok, translated = pcall(vim.fn.keytrans, key)
@@ -368,13 +330,7 @@ function M.set_active(owner, bufnr, mode, key, active, scope)
   reconcile(slot)
 end
 
---- True when `owner` has a live, installed claim on this slot.
----
---- Verifies against the mapping actually installed rather than trusting cached
---- state: displacement is normally detected during reconcile, and a passive
---- query would otherwise still report a key that another plugin has taken
---- over. The help popup relies on this to avoid advertising an action the key
---- no longer invokes.
+--- Check the actual installed mapping; a displaced key must disappear from help.
 --- @return boolean
 function M.is_live(owner, bufnr, mode, key, scope)
   local by_lhs = slot_table(bufnr, mode, false)
