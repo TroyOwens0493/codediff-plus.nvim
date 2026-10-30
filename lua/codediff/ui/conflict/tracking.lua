@@ -76,18 +76,7 @@ function M.is_block_active(session, block)
     table.insert(expected_lines, seed_lines[i] or "")
   end
 
-  -- 3. Compare
-  if #current_lines ~= #expected_lines then
-    return false
-  end
-
-  for i = 1, #current_lines do
-    if current_lines[i] ~= expected_lines[i] then
-      return false
-    end
-  end
-
-  return true
+  return vim.deep_equal(current_lines, expected_lines)
 end
 
 --- Determine which side was accepted for a resolved conflict block
@@ -112,38 +101,18 @@ function M.get_accepted_side(session, block)
   local end_row = mark[3].end_row
   local current_lines = vim.api.nvim_buf_get_lines(session.result_bufnr, start_row, end_row, false)
 
-  -- Get incoming (left) content
-  local incoming_lines = {}
-  if session.original_bufnr and vim.api.nvim_buf_is_valid(session.original_bufnr) then
-    local left_start = block.output1_range.start_line
-    local left_end = block.output1_range.end_line
-    incoming_lines = vim.api.nvim_buf_get_lines(session.original_bufnr, left_start - 1, left_end - 1, false)
-  end
-
-  -- Get current (right) content
-  local current_side_lines = {}
-  if session.modified_bufnr and vim.api.nvim_buf_is_valid(session.modified_bufnr) then
-    local right_start = block.output2_range.start_line
-    local right_end = block.output2_range.end_line
-    current_side_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, right_start - 1, right_end - 1, false)
-  end
-
-  -- Helper to compare line arrays
-  local function lines_equal(a, b)
-    if #a ~= #b then
-      return false
+  local function input_lines(buf, range)
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      return vim.api.nvim_buf_get_lines(buf, range.start_line - 1, range.end_line - 1, false)
     end
-    for i = 1, #a do
-      if a[i] ~= b[i] then
-        return false
-      end
-    end
-    return true
+    return {}
   end
+  local incoming_lines = input_lines(session.original_bufnr, block.output1_range)
+  local current_side_lines = input_lines(session.modified_bufnr, block.output2_range)
 
   -- Check which side matches
-  local matches_incoming = lines_equal(current_lines, incoming_lines)
-  local matches_current = lines_equal(current_lines, current_side_lines)
+  local matches_incoming = vim.deep_equal(current_lines, incoming_lines)
+  local matches_current = vim.deep_equal(current_lines, current_side_lines)
 
   if matches_incoming and matches_current then
     return "both" -- Both sides are the same (shouldn't happen in conflict, but handle it)
@@ -154,14 +123,8 @@ function M.get_accepted_side(session, block)
   else
     -- Content doesn't match either side exactly (could be "both" concatenated or manual edit)
     -- Check if it's both sides concatenated
-    local both_lines = {}
-    for _, line in ipairs(incoming_lines) do
-      table.insert(both_lines, line)
-    end
-    for _, line in ipairs(current_side_lines) do
-      table.insert(both_lines, line)
-    end
-    if lines_equal(current_lines, both_lines) then
+    local both_lines = vim.list_extend(vim.list_extend({}, incoming_lines), current_side_lines)
+    if vim.deep_equal(current_lines, both_lines) then
       return "both"
     end
     return "edited" -- Manual edit or unknown

@@ -1,118 +1,56 @@
--- Vimdiff-style do/dp: move a hunk between the two panes.
---
--- In inline layout there is only one pane, so `do` reverts the hunk to the
--- original and `dp` has nothing to do.
-
+-- Vimdiff-style do/dp. Inline do reverts a hunk; inline dp has no edit to make.
 local M = {}
-
 local lifecycle = require("codediff.ui.lifecycle")
 local refresh = require("codediff.ui.refresh")
 local hunk_actions = require("codediff.ui.view.actions.hunk")
 
-function M.diff_get(ctx)
-  local session = lifecycle.get_session(ctx.tabpage)
-  if not session then
+local function transfer_hunk(ctx, put)
+  if not lifecycle.get_session(ctx.tabpage) then
     return
   end
-
-  if ctx.is_inline then
-    -- Inline mode: revert modified lines to original
-    if not vim.bo[ctx.modified_bufnr].modifiable then
-      vim.notify("Buffer is not modifiable", vim.log.levels.WARN)
-      return
-    end
-
-    local hunk, hunk_idx = hunk_actions.find_hunk_at_cursor(ctx)
-    if not hunk then
-      vim.notify("No hunk at cursor position", vim.log.levels.WARN)
-      return
-    end
-
-    local orig_lines = vim.api.nvim_buf_get_lines(ctx.original_bufnr, hunk.original.start_line - 1, hunk.original.end_line - 1, false)
-    vim.api.nvim_buf_set_lines(ctx.modified_bufnr, hunk.modified.start_line - 1, hunk.modified.end_line - 1, false, orig_lines)
-    refresh.buffer_changed(ctx.modified_bufnr)
-    vim.api.nvim_echo({ { string.format("Reverted hunk %d", hunk_idx), "None" } }, false, {})
-    return
-  end
-
-  -- Side-by-side mode: copy from other buffer to current
-  local current_buf = vim.api.nvim_get_current_buf()
-  local is_original = current_buf == ctx.original_bufnr
-  local target_buf = current_buf
-  local source_buf = is_original and ctx.modified_bufnr or ctx.original_bufnr
-
-  -- Check if target buffer is modifiable
-  if not vim.bo[target_buf].modifiable then
-    vim.notify("Buffer is not modifiable", vim.log.levels.WARN)
-    return
-  end
-
-  local hunk, hunk_idx = hunk_actions.find_hunk_at_cursor(ctx)
-  if not hunk then
-    vim.notify("No hunk at cursor position", vim.log.levels.WARN)
-    return
-  end
-
-  -- Get source and target ranges
-  local source_range = is_original and hunk.modified or hunk.original
-  local target_range = is_original and hunk.original or hunk.modified
-
-  -- Get lines from source buffer
-  local source_lines = vim.api.nvim_buf_get_lines(source_buf, source_range.start_line - 1, source_range.end_line - 1, false)
-
-  -- Replace lines in target buffer
-  vim.api.nvim_buf_set_lines(target_buf, target_range.start_line - 1, target_range.end_line - 1, false, source_lines)
-
-  -- Trigger diff refresh to update highlights
-  refresh.buffer_changed(target_buf)
-
-  vim.api.nvim_echo({ { string.format("Obtained hunk %d", hunk_idx), "None" } }, false, {})
-end
-
-function M.diff_put(ctx)
-  local session = lifecycle.get_session(ctx.tabpage)
-  if not session then
-    return
-  end
-
-  if ctx.is_inline then
-    -- Inline mode: buffer already has modified content, dp is a no-op
+  if ctx.is_inline and put then
     vim.notify("Buffer already contains the modified version. Use 'do' to revert to original.", vim.log.levels.INFO)
     return
   end
 
-  -- Side-by-side mode: copy from current buffer to other
-  local current_buf = vim.api.nvim_get_current_buf()
-  local is_original = current_buf == ctx.original_bufnr
-  local source_buf = current_buf
-  local target_buf = is_original and ctx.modified_bufnr or ctx.original_bufnr
-
-  -- Check if target buffer is modifiable
-  if not vim.bo[target_buf].modifiable then
-    vim.notify("Target buffer is not modifiable", vim.log.levels.WARN)
+  local current = vim.api.nvim_get_current_buf()
+  local side = current == ctx.original_bufnr and "original" or "modified"
+  local other = side == "original" and "modified" or "original"
+  local source, target, source_side, target_side
+  if ctx.is_inline then
+    source, target = ctx.original_bufnr, ctx.modified_bufnr
+    source_side, target_side = "original", "modified"
+  elseif put then
+    source, target = current, ctx[other .. "_bufnr"]
+    source_side, target_side = side, other
+  else
+    source, target = ctx[other .. "_bufnr"], current
+    source_side, target_side = other, side
+  end
+  if not vim.bo[target].modifiable then
+    vim.notify(put and "Target buffer is not modifiable" or "Buffer is not modifiable", vim.log.levels.WARN)
     return
   end
-
-  local hunk, hunk_idx = hunk_actions.find_hunk_at_cursor(ctx)
+  local hunk, index = hunk_actions.find_hunk_at_cursor(ctx)
   if not hunk then
     vim.notify("No hunk at cursor position", vim.log.levels.WARN)
     return
   end
 
-  -- Get source and target ranges
-  local source_range = is_original and hunk.original or hunk.modified
-  local target_range = is_original and hunk.modified or hunk.original
+  local source_range, target_range = hunk[source_side], hunk[target_side]
+  local lines = vim.api.nvim_buf_get_lines(source, source_range.start_line - 1, source_range.end_line - 1, false)
+  vim.api.nvim_buf_set_lines(target, target_range.start_line - 1, target_range.end_line - 1, false, lines)
+  refresh.buffer_changed(target)
+  local message = ctx.is_inline and "Reverted hunk %d" or put and "Put hunk %d" or "Obtained hunk %d"
+  vim.api.nvim_echo({ { string.format(message, index), "None" } }, false, {})
+end
 
-  -- Get lines from source buffer
-  local source_lines = vim.api.nvim_buf_get_lines(source_buf, source_range.start_line - 1, source_range.end_line - 1, false)
+function M.diff_get(ctx)
+  transfer_hunk(ctx, false)
+end
 
-  -- Replace lines in target buffer
-  vim.api.nvim_buf_set_lines(target_buf, target_range.start_line - 1, target_range.end_line - 1, false, source_lines)
-
-  -- Trigger diff refresh to update highlights
-  refresh.buffer_changed(target_buf)
-
-  vim.api.nvim_echo({ { string.format("Put hunk %d", hunk_idx), "None" } }, false, {})
+function M.diff_put(ctx)
+  transfer_hunk(ctx, true)
 end
 
 return M
