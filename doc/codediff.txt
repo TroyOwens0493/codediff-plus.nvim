@@ -615,9 +615,9 @@ This fork can generate a guided review with the configured Codex connection.
 Enable ai.enabled, open a comparison, then run :CodeDiffReview start.
 The agent excludes generated files, including lockfiles, build output, and
 generated clients, from review steps and code excerpts.
-The review opens a new tab named Guided Review. Stops appear on the left, a
-short summary split spans the top, and CodeDiff shows the selected stop's
-changes below. The original comparison stays open.
+The review opens a new tab named Guided Review. Stops appear on the left, and
+CodeDiff shows the selected stop's changes beside them. The panes use the full
+height of the tab. The original comparison stays open.
 >
   :CodeDiffReview start
   :CodeDiffReview step 1
@@ -627,20 +627,19 @@ changes below. The original comparison stays open.
   :CodeDiffReview file 1
   :CodeDiffReview seen
   :CodeDiffReview unseen
-  :CodeDiffReview ask Why does this change?
   :CodeDiffReview refresh
   :CodeDiffReview cancel
   :CodeDiffReview close
 <
 Move the cursor to a stop in the sidebar, or use the commands or Lua API to
-select it. The summary and read-only diff panes update together. A stop shows
+select it. The sidebar and read-only diff panes update together. A stop shows
 only its changed blocks, including related blocks from several files. Other
 changes in the same file are excluded. The first or saved stop is displayed
 automatically. Source line numbers remain visible beside the code. Generation
 does not take focus again when it finishes. Mark reviewed steps explicitly.
 Changed comparisons make the guide stale; use refresh to generate it again.
 Guides and progress are cached by comparison content. Merge conflict views are
-not supported. Follow-up answers use only the supplied comparison context.
+not supported. Error messages appear below the stop list.
 Use ]c and [c from any review pane to jump between changed blocks in the
 current stop. These keys use keymaps.view.next_hunk and prev_hunk, and respect
 diff.cycle_next_hunk.
@@ -661,14 +660,13 @@ The public Lua API provides the same actions:
   diff.review_open_excerpt(2)
   diff.review_open_file(1)
   diff.review_mark_seen()             -- false clears the mark
-  diff.review_ask("Why does this change?")
   local status = diff.review_status() -- status, position, count, seen, open
   local steps = diff.review_steps()   -- copy with file paths and groups
   diff.review_cancel()
   diff.review_close()
 <
 Request and navigation functions return true when accepted, false otherwise.
-Generation, answers, and file selection finish asynchronously. Status values:
+Generation and file selection finish asynchronously. Status values:
 idle, loading, ready, empty, stale, error, cancelled. Normal Neovim window
 commands can focus or scroll each pane. Closing a review split closes the review
 tab. review_status() includes tabpage and source_tabpage; either tab can be used
@@ -710,8 +708,8 @@ All events pass a `data` table accessible via the autocmd callback's
     `group`    Staged/unstaged group, when available.
 
 Review file selection follows navigation commands and the cursor in code panes.
-Use these events to select a theme by language, including while the sidebar or
-summary has focus.
+Use these events to select a theme by language, including while the sidebar
+has focus.
 
 Example: Hide tabline while CodeDiff is open:
 >lua

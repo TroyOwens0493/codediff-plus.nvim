@@ -49,8 +49,8 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
           },
         },
         steps = {
-          { title = "Mixed languages", summary = "Related changes.", attention = "", excerpts = {}, files = { 1, 2 }, notes = {}, questions = {} },
-          { title = "Plain text", summary = "Text changes.", attention = "", excerpts = {}, files = { 3 }, notes = {}, questions = {} },
+          { title = "Mixed languages", summary = "Related changes.", attention = "", excerpts = {}, files = { 1, 2 }, notes = {} },
+          { title = "Plain text", summary = "Text changes.", attention = "", excerpts = {}, files = { 3 }, notes = {} },
         },
       }
       panel.open(state)
@@ -140,7 +140,7 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       end
       vim.api.nvim_exec_autocmds("CursorMoved", { buffer = state.view_buffers.modified })
       assert.equals("sample.lua", review_events[#review_events].data.path)
-      vim.api.nvim_set_current_win(state.view_windows.summary)
+      vim.api.nvim_set_current_win(state.view_windows.stops)
       assert.equals("sample.lua", review_events[#review_events].data.path)
       state.position = 2
       panel.render(state)

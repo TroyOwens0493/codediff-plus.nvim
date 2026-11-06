@@ -53,7 +53,7 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       return screen:exec([[
         for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
           local buf = vim.api.nvim_win_get_buf(win)
-          if vim.bo[buf].filetype == 'codediff-review' then
+          if vim.bo[buf].filetype == 'codediff-review-stops' then
             return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), '\n')
           end
         end
@@ -99,7 +99,7 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       screen:flush()
     end
 
-    it("opens a named review tab with a stop sidebar, top summary, and scoped CodeDiff panes", function()
+    it("opens a named review tab with a full-height stop sidebar and scoped CodeDiff panes", function()
       local source = h.panes(screen)
       local count = screen:exec("return #vim.api.nvim_list_tabpages()")
       screen:exec("vim.o.showtabline = 2")
@@ -114,7 +114,7 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       assert.is_nil(text():find("working-A", 1, true))
       assert.is_truthy(changes():find("working-A", 1, true))
       assert.is_nil(changes():find("working-B", 1, true))
-      assert.is_truthy(text():find("a.txt:2", 1, true))
+      assert.is_nil(text():find("Explain the change in", 1, true))
       assert.is_true(h.grid_contains(screen, "Guided Review"))
       assert.is_true(screen:exec(
         [[
@@ -133,18 +133,20 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
         { layout }
       ))
       assert.is_true(screen:exec([[
-        local summary, stops, diff
+        local stops, diff
         for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
           local ft = vim.bo[vim.api.nvim_win_get_buf(win)].filetype
-          if ft == 'codediff-review' then summary = win
-          elseif ft == 'codediff-review-stops' then stops = win
+          assert(ft ~= 'codediff-review')
+          assert(not vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)):match('/summary$'))
+          if ft == 'codediff-review-stops' then stops = win
           elseif ft == 'codediff-review-diff' then diff = win end
           assert(ft ~= 'codediff-explorer')
         end
-        return summary and stops and diff and vim.api.nvim_win_get_position(summary)[1] < vim.api.nvim_win_get_position(diff)[1]
+        return stops and diff and vim.api.nvim_win_get_position(stops)[1] == vim.api.nvim_win_get_position(diff)[1]
           and vim.api.nvim_win_get_position(stops)[2] < vim.api.nvim_win_get_position(diff)[2]
-          and vim.api.nvim_win_get_height(summary) <= 7
+          and vim.api.nvim_win_get_height(stops) == vim.api.nvim_win_get_height(diff)
       ]]))
+      assert.equals(layout == "inline" and 2 or 3, screen:exec("return #vim.api.nvim_tabpage_list_wins(0)"))
       assert.same(
         { ["]c"] = "Next hunk", ["[c"] = "Previous hunk", [" v"] = "Mark review stop as reviewed" },
         screen:exec([[
@@ -227,7 +229,7 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       assert.equals("working-A", current_line())
       screen:exec([[
         for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-          if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'codediff-review' then
+          if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'codediff-review-stops' then
             vim.api.nvim_set_current_win(win)
             return
           end
@@ -503,22 +505,12 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       h.assert_no_errors(screen)
     end)
 
-    it("answers a question about the active step", function()
-      start()
-      screen:command("CodeDiffReview ask Why does this change?")
-      screen:await(function()
-        return text():find("A: Based on the supplied diff: Why does this change?", 1, true) ~= nil
-      end, "answer did not appear")
-      assert.equals("ready", status().status)
-      h.assert_no_errors(screen)
-    end)
-
     it("cleans up the whole review when a review split is closed", function()
       local source_tab = screen:exec("return vim.api.nvim_get_current_tabpage()")
       start()
       screen:exec([[
         for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-          if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'codediff-review' then
+          if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == 'codediff-review-stops' then
             vim.api.nvim_set_current_win(win)
             vim.cmd('close')
             return
@@ -527,7 +519,7 @@ for _, layout in ipairs({ "side-by-side", "inline" }) do
       ]])
       screen:await(function()
         return screen:exec("return vim.api.nvim_get_current_tabpage()") == source_tab
-      end, "closing a summary split did not close the review")
+      end, "closing the stop sidebar did not close the review")
       assert.is_false(status().open)
       assert.is_true(screen:exec([[
         for _, buf in ipairs(vim.api.nvim_list_bufs()) do

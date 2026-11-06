@@ -239,8 +239,4 @@ function M.review(snapshot, opts, callback)
   return request(snapshot, opts, require("codediff.review.format"), callback)
 end
 
-function M.review_answer(snapshot, opts, callback)
-  return request(snapshot, opts, require("codediff.review.answer"), callback)
-end
-
 return M

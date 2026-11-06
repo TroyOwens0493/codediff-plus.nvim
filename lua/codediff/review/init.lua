@@ -42,13 +42,13 @@ end
 
 local function stop(state)
   state.generation = state.generation + 1
-  for _, field in ipairs({ "cancel_capture", "cancel_request", "cancel_check", "cancel_answer" }) do
+  for _, field in ipairs({ "cancel_capture", "cancel_request", "cancel_check" }) do
     if state[field] then
       state[field]()
       state[field] = nil
     end
   end
-  state.answer_loading, state.pending, state.checking, state.after_check = nil, nil, nil, nil
+  state.pending, state.checking, state.after_check = nil, nil, nil
 end
 
 local function stale(state, reason)
@@ -239,7 +239,7 @@ function M.start(opts)
   state = state or { tabpage = tabpage, generation = 0, namespace = vim.api.nvim_create_namespace("CodeDiffReviewExcerpt" .. tabpage) }
   states[tabpage] = state
   state.session, state.status, state.error = session, "loading", nil
-  state.steps, state.snapshot, state.answers = nil, nil, {}
+  state.steps, state.snapshot = nil, nil
   state.generated_files = {}
   state.position, state.seen = 1, {}
   panel.open(state)
@@ -306,7 +306,6 @@ function M.status(tabpage)
     open = state.review_tabpage ~= nil and vim.api.nvim_tabpage_is_valid(state.review_tabpage),
     tabpage = state.review_tabpage,
     source_tabpage = state.tabpage,
-    answer_loading = state.answer_loading == true,
   }
 end
 
@@ -427,38 +426,6 @@ function M.mark_seen(value)
   return true
 end
 
-function M.ask(question)
-  local state = ready()
-  if not state then
-    return false
-  end
-  if type(question) ~= "string" or vim.trim(question) == "" or #question > 4000 then
-    return notify("Supply a question of 1 to 4000 characters.")
-  end
-  if state.answer_loading then
-    return notify("An answer is already loading.")
-  end
-  local position = state.position
-  state.answer_loading = true
-  panel.render(state)
-  return check(state, function()
-    local generation = state.generation
-    local payload = vim.json.decode(state.snapshot.payload)
-    payload.step, payload.question = state.steps[position], question
-    state.cancel_answer = provider.review_answer({ payload = vim.json.encode(payload) }, options(), function(err, answer)
-      if not is_live(state, generation) then
-        return
-      end
-      state.cancel_answer, state.answer_loading = nil, nil
-      check(state, function()
-        state.answers[position] = state.answers[position] or {}
-        table.insert(state.answers[position], { question = question, text = err or answer })
-        panel.render(state)
-      end, true)
-    end)
-  end, true)
-end
-
 function M.cancel(tabpage)
   local state = state_for(tabpage)
   if not state then
@@ -510,8 +477,6 @@ function M.command(args)
     return M.mark_seen()
   elseif action == "unseen" then
     return M.mark_seen(false)
-  elseif action == "ask" then
-    return M.ask(table.concat(args, " ", 2))
   elseif action == "close" then
     return M.close()
   elseif action == "cancel" then
@@ -520,7 +485,7 @@ function M.command(args)
     vim.notify(vim.inspect(M.status()))
     return true
   end
-  return notify("Use :CodeDiffReview start|refresh|next|prev|step N|excerpt N|file N|seen|unseen|ask QUESTION|status|cancel|close")
+  return notify("Use :CodeDiffReview start|refresh|next|prev|step N|excerpt N|file N|seen|unseen|status|cancel|close")
 end
 
 return M

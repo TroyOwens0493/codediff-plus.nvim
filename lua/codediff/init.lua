@@ -52,10 +52,6 @@ function M.review_mark_seen(value)
   return require("codediff.review").mark_seen(value)
 end
 
-function M.review_ask(question)
-  return require("codediff.review").ask(question)
-end
-
 function M.review_cancel()
   return require("codediff.review").cancel()
 end

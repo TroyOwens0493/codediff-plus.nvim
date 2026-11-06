@@ -9,7 +9,8 @@ describe("AI Codex provider", function()
     opts.command = { "python3", support.project_root .. "/tests/fixtures/ai/fake_codex.py", "ok" }
     opts.request_timeout_ms = 1000
     opts.timeout_ms = 1500
-    snapshot = { payload = vim.json.encode({ question = "How does this change work?" }) }
+    local files = { { id = 1, file = "a.lua", changes = {} } }
+    snapshot = { files = files, payload = vim.json.encode({ review_kind = "guide", files = files }) }
   end)
 
   after_each(function()
@@ -19,8 +20,8 @@ describe("AI Codex provider", function()
 
   local function run()
     local done, err, result
-    provider.review_answer(snapshot, opts, function(failure, answer)
-      done, err, result = true, failure, answer
+    provider.review(snapshot, opts, function(failure, steps)
+      done, err, result = true, failure, steps
     end)
     assert.is_true(vim.wait(3000, function()
       return done
@@ -28,10 +29,11 @@ describe("AI Codex provider", function()
     return err, result
   end
 
-  it("uses managed ChatGPT auth and parses a fragmented JSONL answer", function()
+  it("uses managed ChatGPT auth and parses a fragmented JSONL guide", function()
     local err, result = run()
     assert.is_nil(err)
-    assert.equals("Based on the supplied diff: How does this change work?", result)
+    assert.equals("Review a.lua", result[1].title)
+    assert.same({ 1 }, result[1].files)
   end)
 
   it("requires ChatGPT sign-in before sending code", function()
@@ -47,7 +49,7 @@ describe("AI Codex provider", function()
   end)
 
   it("reports inference failures, malformed responses, and process exits", function()
-    for scenario, expected in pairs({ failed = "Usage limit reached", invalid = "invalid answer", crash = "exit 7" }) do
+    for scenario, expected in pairs({ failed = "Usage limit reached", invalid = "invalid review guide", crash = "exit 7" }) do
       provider.stop()
       vim.wait(20)
       opts.command[3] = scenario
@@ -63,12 +65,12 @@ describe("AI Codex provider", function()
     assert.is_truthy(err:find("timed out", 1, true))
   end)
 
-  it("keeps waiting while reasoning and answer events arrive past the timeout", function()
+  it("keeps waiting while reasoning and response events arrive past the timeout", function()
     opts.command[3] = "streaming"
     opts.timeout_ms = 300
     local err, result = run()
     assert.is_nil(err)
-    assert.equals("Based on the supplied diff: How does this change work?", result)
+    assert.equals("Review a.lua", result[1].title)
   end)
 
   it("times out after a stream stops sending events", function()
@@ -88,7 +90,7 @@ describe("AI Codex provider", function()
   it("cancels without delivering a late result", function()
     opts.command[3] = "slow"
     local called = false
-    local stop = provider.review_answer(snapshot, opts, function()
+    local stop = provider.review(snapshot, opts, function()
       called = true
     end)
     vim.wait(50)

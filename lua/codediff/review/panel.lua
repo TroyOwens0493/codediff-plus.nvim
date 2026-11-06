@@ -123,15 +123,11 @@ function M.open(state)
   local initial = vim.api.nvim_get_current_buf()
   local prefix = "codediff-review://" .. tab .. "/"
   local bufs = {
-    summary = buffer(prefix .. "summary", "codediff-review"),
     stops = buffer(prefix .. "stops", "codediff-review-stops"),
     original = buffer(prefix .. "original", "codediff-review-diff"),
     modified = buffer(prefix .. "modified", "codediff-review-diff"),
   }
-  local wins = { summary = vim.api.nvim_get_current_win() }
-  vim.api.nvim_win_set_buf(wins.summary, bufs.summary)
-  vim.cmd("belowright split")
-  wins.modified = vim.api.nvim_get_current_win()
+  local wins = { modified = vim.api.nvim_get_current_win() }
   vim.api.nvim_win_set_buf(wins.modified, bufs.modified)
   vim.cmd("leftabove vsplit")
   wins.stops = vim.api.nvim_get_current_win()
@@ -152,10 +148,7 @@ function M.open(state)
   end
   vim.wo[wins.stops].winfixwidth = true
   vim.wo[wins.stops].winbar = "Stops"
-  vim.wo[wins.summary].winfixheight = true
-  vim.wo[wins.summary].wrap, vim.wo[wins.summary].linebreak = true, true
-  vim.wo[wins.summary].winbar = "Guided Review"
-  vim.api.nvim_win_set_height(wins.summary, math.max(3, math.min(7, math.floor(vim.o.lines * 0.18))))
+  vim.wo[wins.stops].wrap, vim.wo[wins.stops].linebreak = true, true
   state.view_buffers, state.view_windows = bufs, wins
   local keymaps = require("codediff.keymap.resolve").keymaps_for("view")
   for _, buf in pairs(bufs) do
@@ -245,44 +238,29 @@ function M.render(state)
   if not bufs or not state.review_tabpage or not vim.api.nvim_tabpage_is_valid(state.review_tabpage) then
     return
   end
+  for _, win in pairs(wins) do
+    if not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+  end
   state.rendering = true
   local stops = { "Guided Review", state.status, "" }
   for index, step in ipairs(state.steps or {}) do
     stops[#stops + 1] = string.format("%s %d. [%s] %s", index == state.position and "→" or " ", index, state.seen[index] and "x" or " ", step.title)
   end
+  if state.error then
+    vim.list_extend(stops, { "", state.error })
+  end
+  if state.status == "loading" then
+    vim.list_extend(stops, { "", "Preparing the guided review…" })
+  elseif state.status == "empty" then
+    vim.list_extend(stops, { "", "This comparison has no changes." })
+  end
   write(bufs.stops, stops)
-  if state.steps and state.steps[state.position] then
+  local step = state.steps and state.steps[state.position]
+  if step then
     vim.api.nvim_win_set_cursor(wins.stops, { state.position + 3, 0 })
   end
-  local step = state.steps and state.steps[state.position]
-  local summary = { step and string.format("Stop %d/%d · %s", state.position, #state.steps, step.title) or "Guided Review · " .. state.status }
-  if state.error then
-    summary[#summary + 1] = state.error
-  end
-  if step then
-    summary[#summary + 1] = step.summary
-    if step.attention ~= "" then
-      summary[#summary + 1] = "Decision: " .. step.attention
-    end
-    for _, note in ipairs(step.notes) do
-      local excerpt = step.excerpts[note.excerpt]
-      summary[#summary + 1] = string.format("%s:%d — %s", state.snapshot.files[excerpt.file_id].file, note.line, note.text)
-    end
-    for index, question in ipairs(step.questions) do
-      summary[#summary + 1] = string.format("Question %d: %s", index, question)
-    end
-    for _, answer in ipairs((state.answers or {})[state.position] or {}) do
-      vim.list_extend(summary, { "Q: " .. answer.question, "A: " .. answer.text })
-    end
-  elseif state.status == "loading" then
-    summary[#summary + 1] = "Preparing the guided review…"
-  elseif state.status == "empty" then
-    summary[#summary + 1] = "This comparison has no changes."
-  end
-  if state.answer_loading then
-    summary[#summary + 1] = "Answer is loading…"
-  end
-  write(bufs.summary, summary)
   local syntax = require("codediff.review.syntax")
   if state.status ~= "ready" then
     syntax.apply(bufs.original)

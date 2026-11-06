@@ -62,7 +62,7 @@ end, {
     end
     return vim.tbl_filter(function(action)
       return action:sub(1, #lead) == lead
-    end, { "start", "refresh", "next", "prev", "step", "excerpt", "file", "seen", "unseen", "ask", "status", "cancel", "close" })
+    end, { "start", "refresh", "next", "prev", "step", "excerpt", "file", "seen", "unseen", "status", "cancel", "close" })
   end,
   desc = "Generate and navigate an AI-guided review of the comparison",
 })

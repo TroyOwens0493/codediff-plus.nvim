@@ -28,7 +28,6 @@ describe("Guided review validation", function()
           excerpts = { { file_id = 1, change_id = 1, side = "modified", start_line = 3, end_line = 4, caption = "The contract" } },
           files = {},
           notes = { { excerpt = 1, line = 4, text = "Required by the caller." } },
-          questions = { "Why change the contract?" },
         },
       },
     }
@@ -103,7 +102,7 @@ describe("Guided review validation", function()
     for _, encoded in ipairs({ "bad JSON", "{}", '{"steps":null}', '{"steps":{}}', '{"steps":[]}' }) do
       assert.is_nil(format.decode(encoded, snapshot))
     end
-    for _, key in ipairs({ "summary", "title", "excerpts", "files", "notes", "questions" }) do
+    for _, key in ipairs({ "summary", "title", "excerpts", "files", "notes" }) do
       local bad = vim.deepcopy(guide)
       bad.steps[1][key] = false
       assert.is_nil(format.decode(vim.json.encode(bad), snapshot))

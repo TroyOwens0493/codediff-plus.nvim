@@ -27,7 +27,6 @@ Watch the AI-guided review demo
 **Keep your coding agent running. Review changes as they land.** The diff view updates as files change, so you can review work from any agent.
 
 - **Guided review:** Use Codex to group related changes into review steps with explanations and code excerpts.
-- **Ask questions:** Ask about the current step without leaving Neovim.
 - **Track progress:** Mark steps as reviewed and return to saved guides. Refresh a guide when its source changes.
 
 AI review is optional and uses your Codex ChatGPT login. [Set up AI review](#ai-setup) to get started.
@@ -675,31 +674,28 @@ restarts this timer. There is no total duration limit while events arrive.
 Open a CodeDiff comparison, enable `ai.enabled`, and run `:CodeDiffReview start`.
 The guide uses the configured Codex connection. It reads the complete
 visible comparison and groups related changes into ordered review steps.
-Each step explains the change, shows code excerpts and notes, and can suggest
-questions about intent. Excerpts come from the actual diff; invalid file or
+Each step shows related code excerpts from the actual diff; invalid file or
 line references are rejected.
 
 The agent excludes generated files, including lockfiles, build output, and
 generated clients. These files do not appear in review steps or code excerpts.
 
 The review opens in a new tab named **Guided Review**. The left sidebar lists
-the stops. A small split across the top shows the selected stop's summary,
-notes, and questions. CodeDiff shows that stop's changes below it, using the
+the stops. CodeDiff shows that stop's changes beside the sidebar, using the
 current side-by-side or inline layout. The source comparison stays in its own
 tab. Use commands or the Lua API to select stops:
 
 ```vim
 :CodeDiffReview start           " Generate a guide, or reopen the current guide
-:CodeDiffReview next            " Show the next stop's changes and summary
+:CodeDiffReview next            " Show the next stop's changes
 :CodeDiffReview prev
 :CodeDiffReview step 2
 :CodeDiffReview excerpt 2       " Open another excerpt in the current step
 :CodeDiffReview file 1          " Jump to a listed file within this stop
 :CodeDiffReview seen            " Mark the current step as reviewed
 :CodeDiffReview unseen
-:CodeDiffReview ask Why does the caller need this change?
 :CodeDiffReview status
-:CodeDiffReview cancel          " Stop the guide request or follow-up answer
+:CodeDiffReview cancel          " Stop the guide request
 :CodeDiffReview close           " Close the review tab and cancel pending work
 :CodeDiffReview refresh         " Generate again, bypassing the saved guide
 ```
@@ -716,7 +712,7 @@ changed blocks in the current stop from any review pane. These keys use
 Press `<leader>v` in any review pane to mark the current stop as reviewed.
 
 Generation does not take focus again when it finishes. Normal Neovim window
-commands can focus or scroll the sidebar, summary, and diff panes. Closing a
+commands can focus or scroll the sidebar and diff panes. Closing a
 review split closes the review tab. The original comparison remains open.
 
 The guide respects file filters, visible staged/unstaged groups, and the
@@ -724,9 +720,9 @@ selected history commit. It supports unsaved buffer changes. A changed
 comparison marks the guide stale and blocks code navigation until you refresh
 it. Progress and guide text are saved under `stdpath("cache")/codediff-review`,
 keyed by repository, comparison content, model, and effort. Source code is not
-saved in the guide cache. Follow-up answers last for the current review session.
-Merge conflict views are not supported. Questions use only the supplied diff
-context; the AI cannot inspect more files or run tools.
+saved in the guide cache. Merge conflict views are not supported. The AI uses
+only the supplied diff context; it cannot inspect more files or run tools.
+Error messages appear below the stop list.
 
 ```lua
 local diff = require("codediff")
@@ -737,7 +733,6 @@ diff.review_prev()
 diff.review_open_excerpt(2)
 diff.review_open_file(1)
 diff.review_mark_seen()         -- false clears the mark
-diff.review_ask("Why is this contract needed?")
 local status = diff.review_status() -- status, position, count, seen, open, tabpage, source_tabpage, error?
 local steps = diff.review_steps()   -- Copy; excerpt paths/groups and listed files included
 diff.review_cancel()
@@ -745,7 +740,7 @@ diff.review_close()
 ```
 
 Navigation and request functions return `true` when accepted and `false` when
-unavailable. Generation, code navigation, and answers complete asynchronously.
+unavailable. Generation and code navigation complete asynchronously.
 `review_status(tabpage?)` and `review_steps(tabpage?)` can inspect another tab.
 Selecting a step does not mark it reviewed; use `review_mark_seen()` explicitly.
 
@@ -760,12 +755,11 @@ Selecting a step does not mark it reviewed; use `review_mark_seen()` explicitly.
 | `review_start(opts?)` | Generate or reopen a guided review; `opts.force` bypasses saved guides |
 | `review_status(tabpage?)` | Read guide status, position, count, and reviewed steps |
 | `review_steps(tabpage?)` | Read a copy of the guide steps, excerpts, and file locations |
-| `review_select(index)` | Show a stop's changes and summary |
+| `review_select(index)` | Show a stop's changes |
 | `review_next()` / `review_prev()` | Move between review steps without wrapping |
 | `review_open_excerpt(index?)` | Open an excerpt in the current step (default: first) |
 | `review_open_file(index?)` | Open a listed file in the current step (default: first) |
 | `review_mark_seen(value?)` | Mark the step reviewed; `false` clears the mark |
-| `review_ask(question)` | Ask about the active step using the captured comparison |
 | `review_cancel()` / `review_close()` | Cancel pending review work or close the review tab |
 | `next_hunk()` | Move to the next hunk |
 | `prev_hunk()` | Move to the previous hunk |
@@ -792,7 +786,7 @@ CodeDiff emits `User` autocmd events for view lifecycle changes:
 Review events use the review tab's `tabpage` and the original comparison's
 `source_tabpage`. File selection follows review commands and the cursor in code
 panes. `path` is absent for a stop with no code. These events can select a theme
-by language while the sidebar or summary has focus.
+by language while the sidebar has focus.
 
 <details>
 <summary>Example: Disable cursorline in the CodeDiff tab</summary>

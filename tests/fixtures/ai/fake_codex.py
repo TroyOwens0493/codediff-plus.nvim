@@ -46,18 +46,15 @@ def complete(thread_id, turn_id, payload):
                           "attention": "Check the intended behavior.",
                           "excerpts": excerpts, "files": [] if excerpts else [file["id"]],
                           "notes": ([{"excerpt": 1, "line": excerpts[0]["start_line"],
-                                      "text": "This connects to the next component."}] if excerpts else []),
-                          "questions": ["Why does this change?"]})
+                                      "text": "This connects to the next component."}] if excerpts else [])})
         output = {"steps": steps, "generated_files": generated_files}
         if scenario == "grouped_guide":
             output = {"generated_files": [], "steps": [{"title": "Related changes", "summary": "Review the changes together.",
                                  "attention": "", "excerpts": [],
                                  "files": [file["id"] for file in payload["files"]],
-                                 "notes": [], "questions": []}]}
+                                 "notes": []}]}
         if scenario == "bad_guide":
             output["steps"][0]["excerpts"][0]["file_id"] = 999
-    if "question" in payload:
-        output = {"answer": "Based on the supplied diff: " + payload["question"]}
     text = "invalid JSON" if scenario == "invalid" else json.dumps(output)
     send({"method": "item/completed", "params": {"threadId": thread_id, "item": {"type": "agentMessage", "text": text}}})
     turn = {"id": turn_id, "status": "completed", "items": []}
@@ -105,9 +102,7 @@ for line in sys.stdin:
         turns += 1
         params = request["params"]
         payload = json.loads(params["input"][0]["text"].split("\n\n", 1)[1])
-        if "question" in payload:
-            assert params["outputSchema"]["required"] == ["answer"]
-        elif payload.get("review_kind") == "guide":
+        if payload.get("review_kind") == "guide":
             assert "steps" in params["outputSchema"]["properties"]
             assert "generated_files" in params["outputSchema"]["required"]
             assert "Exclude generated files" in params["input"][0]["text"]
